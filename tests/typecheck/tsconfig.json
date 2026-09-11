@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "baseUrl": ".",
+    "paths": {
+      "endpoint-permissions-kit": ["../../src/index.ts"],
+      "endpoint-permissions-kit/types": ["../../src/types.ts"]
+    }
+  },
+  "include": ["./*.ts"]
+}
