@@ -1,39 +1,44 @@
 {
   "name": "endpoint-permissions-kit",
   "version": "0.1.0",
-  "description": "Private endpoint permissions framework",
+  "description": "Permisos por endpoint: registro en memoria, roles tipados, agnóstico de framework",
   "private": true,
   "type": "module",
-  "main": "./dist/cjs/index.js",
+  "main": "./dist/cjs/index.cjs",
   "module": "./dist/esm/index.js",
   "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
       "types": "./dist/types/index.d.ts",
       "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "default": "./dist/esm/index.js"
+      "require": "./dist/cjs/index.cjs"
+    },
+    "./types": {
+      "types": "./dist/types/types.d.ts",
+      "import": "./dist/esm/types.js",
+      "require": "./dist/cjs/types.cjs"
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "pkit": "./bin/pkit.mjs"
+  },
   "files": [
     "dist",
-    "src"
+    "bin"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "bun run scripts/build.ts",
-    "build:esm": "bun build ./src/index.ts --outdir ./dist/esm --format esm --target node",
-    "build:cjs": "bun build ./src/index.ts --outdir ./dist/cjs --format cjs --target node",
-    "build:iife": "bun build ./src/index.ts --outdir ./dist/iife --format iife --target browser --name EndpointPermissionsKit",
-    "build:types": "tsc --project tsconfig.build.json",
     "clean": "rm -rf dist",
     "test": "bun test",
-    "test:watch": "bun test --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/typecheck"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/node": "^26.2.0",
     "typescript": "^5.9.3"
   }
 }
