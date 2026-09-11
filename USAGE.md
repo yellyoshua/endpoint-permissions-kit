@@ -1,287 +1,161 @@
-Los archivos de permisos se llegan a cargar a nivel raiz del donde se encuentra el index, generalmente se lo hace desde un archivo main.js. De esa forma se precargan los permisos en memoria y genera un árbol de permisos que puede ser accedido desde cualquier parte de la aplicación con la libreria.
+# Uso de Endpoint Permissions Kit
 
-Todo está precargardo de manera que la librería pueda ser usada en cualquier parte de la aplicación sin necesidad de precargar los permisos nuevamente. La libreria contiene un método `pkit.permissions.all = {}`, este método devuelve un objeto que contiene todos los permisos de la aplicación, agrupados por rol. Es configuración del sistema, de solo lectura: describe cómo está organizada la autorización, no qué puede hacer el usuario de la petición en curso.
+## Registro y arranque
+
+La configuración debe evaluarse antes que los módulos de permisos. Un módulo separado evita que el orden de evaluación de imports ESM adelante el registro al catálogo.
+
+`pkit.config.js`:
 
 ```js
-pkit.permissions.all = {
-    'admin': {
-        'module.submodule.action.find':   { enabled: true, properties: [] },
-        'module.submodule.action.update': { enabled: true, properties: [] },
-        'module.submodule.action.create': { enabled: true, properties: [] },
-        'module.submodule.action.remove': { enabled: true, properties: [] }
-    },
-    'staff': {
-        'module.submodule.action.find':   { enabled: true,  properties: [] },
-        'module.submodule.action.update': { enabled: true,  properties: [] },
-        'module.submodule.action.create': { enabled: false, properties: [] },
-        'module.submodule.action.remove': { enabled: false, properties: [] }
-    }
-    ...
-}
+import pkit from 'endpoint-permissions-kit';
+
+pkit.context.set('roles', ['admin', 'staff', 'public']);
 ```
 
-Para el cliente existe la vista materializada de un solo rol. El cliente nunca conoce el catálogo completo ni el nombre de otros roles: recibe un mapa plano y responde con una sola lectura. Un path ausente es `false`.
+`modules/marketing/portals/permissions.js`:
 
 ```js
-pkit.permissions.forRole('staff') = {
-    'module.submodule.action.find':   true,
-    'module.submodule.action.update': true,
-    'module.submodule.action.create': false,
-    'module.submodule.action.remove': false
-    ...
-}
-```
-
-Los roles se declaran en un archivo de configuración propio. Tiene que ser un módulo aparte porque ESM evalúa todos los imports antes del cuerpo del archivo que los importa: poner `pkit.context.set` arriba de los imports en `app.js` no adelanta su ejecución.
-
-```js
-// path: pkit.config.js
-import pkit from 'permission-lib-name';
-
-// Un usuario tiene exactamente un rol. No hay unión de roles.
-// Si nunca se llama, el catálogo queda en ['general'].
-// 'general' es el destino de los registerActions sin .role(), solo hace falta mientras existan.
-pkit.context.set('roles', ['general', 'admin', 'staff', 'public']);
-```
-
-Para ejecutar todas las capas de un permiso se manda a llamar de la siguiente forma:
-
-```js
-import pkit from 'permission-lib-name';
-
-const { result, errors } = await pkit.validate({
-    action: 'module.submodule.action', // permiso base. debe existir en pkit.permissions
-    method: 'update', // 'find' | 'update' | 'create' | 'remove'
-    role: 'staff', // rol del usuario. debe existir en el catálogo. resolver siempre desde la sesión, nunca desde el request
-    select: ['id', 'name'], // solo en find. si se omite, se toma select = properties
-    data: {
-        id: 1,
-        name: 'Test',
-        description: 'Test',
-        owner: 1,
-        status: 'draft'
-    },
-    context: {
-        user: {
-            id: 1,
-            name: 'Test'
-        }
-    }
-});
-
-// errors vacío = pasó. result es null cuando errors tiene algo.
-// result en find    = el select efectivo, para que el handler consulte con él.
-// result en el resto = la data recortada a properties.
-```
-
-El orden de resolución corta en el primer paso que falla: rol conocido, permiso registrado para ese rol, método habilitado, campos, hooks. Sin registro explícito no hay permiso: la ausencia deniega.
-
-Para definir los permisos de un modulo se lo realiza desde un archivo de permisos, por lo general se encuentra en la misma carpeta del modulo. El eslabón `.role()` es opcional y va antes de `registerActions`:
-
-```js
-// path: modules/marketing/portals/portals.permissions.js
-import pkit from 'permission-lib-name';
+import pkit from 'endpoint-permissions-kit';
 
 const portals = pkit.module('marketing').module('portals');
 
-portals.role('admin').registerActions({
-    find: {
-        properties: ['id', 'name', 'link', 'description', 'owner', 'status'],
-        enabled: true,
-    },
-    update: {
-        properties: ['id', 'name', 'link', 'description', 'status'],
-        enabled: true,
-    },
-    create: {
-        properties: ['name', 'link', 'description', 'status'],
-        enabled: true,
-    },
-    remove: {
-        properties: ['id'],
-        enabled: true,
-    }
+portals.registerActions({
+  find: { properties: ['id', 'name', 'link'], enabled: true },
+  update: { properties: [], enabled: false },
+  create: { properties: [], enabled: false },
 });
 
 portals.role('staff').registerActions({
-    find: {
-        properties: ['id', 'name', 'link', 'description'],
-        enabled: true,
-    },
-    update: {
-        properties: ['id', 'name', 'description'],
-        enabled: true,
-    },
-    create: {
-        properties: [],
-        enabled: false,
-    },
-    remove: {
-        properties: [],
-        enabled: false,
-    }
+  update: { properties: ['id', 'name', 'description'], enabled: true },
 });
 
-// Un rol que no aparece en el módulo no hereda nada. No hay rol base ni extends.
-portals.role('public').registerActions({
-    find:   { properties: ['id', 'name', 'link'], enabled: true },
-    update: { properties: [], enabled: false },
-    create: { properties: [], enabled: false },
-    remove: { properties: [], enabled: false }
-});
-
-// Sin .role() el destino es 'general'.
-// portals.registerActions({...}) === portals.role('general').registerActions({...})
-```
-
-`properties` se compara siempre igual: lo que se pide debe ser subconjunto de lo declarado. En `find` aplica sobre `select` y filtra la salida; en `update`, `create` y `remove` aplica sobre las keys de `data`, y es lo que impide que mandar `owner` o `status` en el body los cuele.
-
-`properties: '*'` es un string, no un array. Desactiva la evaluación de campos para ese método: cualquier campo pasa, tanto en `select` como en `data`.
-
-```js
 portals.role('admin').registerActions({
-    find:   { properties: '*',  enabled: true }, // devuelve todos los campos, sin evaluar
-    update: { properties: '*',  enabled: true }, // acepta cualquier key del body
-    ...
+  find: { properties: '*', enabled: true },
+  update: { properties: '*', enabled: true },
+  create: { properties: ['name', 'link'], enabled: true },
+  remove: { properties: ['id'], enabled: true },
 });
+
+function checkPublishedPortal(_data, context) {
+  if (context.resource.status === 'published') {
+    throw new Error('Published portals cannot be removed');
+  }
+}
+
+portals.hook('remove', checkPublishedPortal);
+
+function checkPortalOwner(_data, context) {
+  if (context.resource.owner !== context.user.id) {
+    throw new Error('Only the owner can update this portal');
+  }
+}
+
+portals.role('staff').hook('update', checkPortalOwner);
 ```
 
-`registerActions` valida en el momento del registro solo lo que puede saber: que el rol exista en el catálogo, que el destino no se haya registrado antes, y la forma del literal. Si el rol no existe, lanza y la app no arranca:
-
-```text
-PkitError: role "admin" no está declarado. Roles disponibles: general.
-¿Falta pkit.context.set('roles', [...]) en pkit.config.js, o se importó antes que este archivo?
-```
-
-Los hooks tienen las dos formas. Sin `.role()` son globales al permiso y corren para cualquier rol; con `.role()` corren solo para ese rol. Un rol no puede anular un hook global: si una regla necesita excepción por rol, no es global.
+`app.js`:
 
 ```js
-// path: modules/marketing/portals-admin/permissions.js
-import pkit from 'permission-lib-name';
+import pkit from 'endpoint-permissions-kit';
+import './pkit.config.js';
+import './modules/marketing/portals/permissions.js';
 
-const portalsAdmin = pkit.module('marketing').module('portals-admin');
-
-portalsAdmin.role('admin').registerActions({
-    find: {
-        properties: ['id','name', 'link', 'description', 'owner', 'status'],
-        enabled: true,
-    },
-    update: {
-        properties: ['id', 'name', 'link', 'description', 'status'],
-        enabled: true,
-    },
-    create: {
-        properties: ['id', 'name', 'link', 'description', 'status'],
-        enabled: true,
-    },
-    remove: {
-        properties: ['id'],
-        enabled: true,
-    }
-});
-
-portalsAdmin
-// Se puede repetir el mismo metodo para agregar mas restricciones a un mismo permiso. Esto se ejecuta una vez valide que se tenga el permiso y que las acciones esten habilitadas. Si alguna de estas no se cumple no se ejecuta el hook. Si el hook lanza un error se detiene el proceso y devuelve el error. Todas las funciones de el hook se ejecutan en paralelo y el resultado final es la union de todos los resultados.
-// Global: invariante del recurso, independiente de quién pide.
-.hook('remove', (data, context, permissions) => {
-    if (data.status === 'published') {
-        throw new Error('Portal is published, cannot remove');
-    }
-})
-.hook('update', (data, context, permissions) => {
-    if (data.status === 'published') {
-        throw new Error('Portal is published, cannot update');
-    }
-});
-
-// Por rol: "solo borras lo tuyo" es del rol, no del recurso. Declarado global bloquearía también al admin.
-portalsAdmin.role('staff')
-.hook('remove', (data, context, permissions) => {
-    if (data.owner !== context.user.id) {
-        throw new Error('You do not have permission to remove this portal');
-    }
-})
-.hook('update', (data, context, permissions) => {
-    if (data.owner !== context.user.id) {
-        throw new Error('You do not have permission to update this portal');
-    }
-});
-
-// permissions es el permiso ya resuelto para el rol de la petición:
-// { role: 'staff', action: 'marketing.portals-admin', method: 'remove', enabled: true, properties: ['id'] }
-```
-
-```js
-// path: modules/marketing/portals/route.js
-import pkit from 'permission-lib-name';
-import abstractRoute from '@/core/route.js';
-
-export const portalsRoute = abstractRoute({
-    // body|query = request.body | request.query
-    // options = request.query (page, perPage, sort, etc...)
-    // params = {user, permissions, session}
-    // el rol sale de params.session, nunca del body ni del query
-    handler: {
-        find: (query, options, params) => {
-        },
-        create: (body, options, params) => {
-        },
-        update: (body, options, params) => {
-        },
-        remove: (query, options, params) => {
-        }
-    },
-    permissions: 'marketing.portals'
-})
-```
-
-```js
-// path: modules/marketing/portals-admin/route.js
-import pkit from 'permission-lib-name';
-import abstractRoute from '@/core/route.js';
-
-export const portalsAdminRoute = abstractRoute({
-    // body|query = request.body | request.query
-    // options = request.query (page, perPage, sort, etc...)
-    // params = {user, permissions, session}
-    handler: {
-        find: (query, options, params) => {
-        },
-        create: (body, options, params) => {
-        },
-        update: (body, options, params) => {
-        },
-        remove: (query, options, params) => {
-        }
-    },
-    permissions: 'marketing.portals-admin'
-});
-```
-
-El orden de `app.js` importa: la config va primero para que los archivos de permisos vean el catálogo de roles al registrarse.
-
-```js
-// app.js
-import pkit from 'permission-lib-name'
-import './pkit.config.js';                                  // 1. catálogo de roles disponible
-
-import './modules/marketing/portals/permissions.js';        // 2. los registros ya ven el catálogo
-import './modules/marketing/portals-admin/permissions.js';
-
-import { portalsRoute } from './modules/marketing/portals/route.js';
-import { portalsAdminRoute } from './modules/marketing/portals-admin/route.js';
-
-// 3. cierra el registro, valida el conjunto y materializa los mapas por rol.
-// registerActions solo ve su propio módulo; la cobertura de roles y la coherencia
-// ruta <-> permiso solo se pueden comprobar cuando terminó de registrarse todo.
-// Cualquier registerActions o hook posterior a seal() lanza.
 pkit.seal();
 ```
 
+`seal()` comprueba los hooks de rol sin método declarado ni heredado y materializa las vistas. Es idempotente. Registrar permisos, hooks o roles después de sellar lanza `SEALED`. El registro valida el literal completo antes de modificar el estado.
+
+## Rol general
+
+`general` siempre existe, incluso sin llamar a `context.set`. `registerActions` sin `.role()` registra en `general`. `validate` sin `role` y `permissions.forRole()` sin argumento también usan `general`.
+
+Para un rol explícito declarado, cada método se busca primero en sus acciones y después en `general`. Un método con `enabled: false` no hereda el método habilitado de `general`. Si ninguno lo declara, se deniega. Un rol desconocido produce `UNKNOWN_ROLE`.
+
+En el ejemplo, `staff.find` y `public.find` heredan de `general`; `staff.update` usa su propia definición; `staff.remove` se deniega.
+
+## Validación de una petición
+
+La aplicación obtiene el rol de la sesión autenticada. No debe aceptar el rol enviado en el body o el query. Omitirlo significa solicitar los permisos de `general`, no autenticar al usuario.
+
 ```js
-// routes.js
-export const routes = {
-    'portals': portalsRoute,
-    'portals-admin': portalsAdminRoute
-}
+const validation = await pkit.validate({
+  action: 'marketing.portals',
+  method: 'update',
+  role: 'staff',
+  data: { id: 1, name: 'Portal' },
+  context: {
+    user: { id: 7 },
+    resource: { id: 1, owner: 7, status: 'draft' },
+  },
+});
 ```
+
+`errors` vacío indica éxito. Si una fase falla, `result` es `null`. El orden es registro sellado, compatibilidad de `select`, rol, permiso, método, datos/campos y hooks. Los fallos anteriores a los hooks detienen la evaluación.
+
+Para `find`, `result` es la selección efectiva. Los campos pedidos se recortan a `properties`; omitir `select` usa todos los campos permitidos.
+
+```js
+const validation = await pkit.validate({
+  action: 'marketing.portals',
+  method: 'find',
+  role: 'staff',
+  select: ['id', 'name', 'owner'],
+});
+```
+
+El resultado es `['id', 'name']`. El handler debe usar esa selección al consultar o construir la respuesta; la librería no consulta la base de datos ni filtra automáticamente una respuesta externa.
+
+En `update`, `create` y `remove`, cualquier clave de `data` fuera de `properties` produce `PROPERTIES_NOT_ALLOWED` con la lista `fields`. En éxito se devuelve el mismo objeto `data`, conservando su tipo. `select` fuera de `find` produce `INVALID_INPUT`.
+
+`properties: '*'` permite cualquier campo. No permite datos con forma inválida: `data` y `context` deben ser objetos; `select` debe ser un array de strings. `data` es obligatoria para escritura. En `find`, `data` es opcional; `context` es opcional en todos los métodos. Los valores omitidos llegan a los hooks como `undefined`, sin fabricar objetos vacíos. Si el hook necesita contexto y este falta, su fallo aparece en `errors`. Los valores `null` se rechazan.
+
+## Hooks y errores
+
+Un hook sin `.role()` es global al permiso. Un hook con `.role()` se ejecuta solo para ese rol. Los hooks de `general` no se heredan por otros roles; usa un hook global para restricciones de todos los usuarios.
+
+Todos los hooks aplicables se ejecutan con `Promise.allSettled`. El orden de errores es globales por registro y después hooks del rol por registro, aunque terminen en distinto orden. Sus valores de retorno se ignoran. El tercer argumento contiene `{ role, action, method, enabled, properties }` del permiso resuelto.
+
+`src/Validators.ts` concentra las reglas de validación; sus métodos reciben datos y estado explícitos, y lanzan excepciones. `validate()` ejecuta esas reglas y los hooks, y es el único método que devuelve errores formateados de validación:
+
+| Código | Información |
+| --- | --- |
+| `NOT_SEALED` | No se llamó a `seal()` |
+| `INVALID_INPUT` | Entrada incompatible con el contrato |
+| `UNKNOWN_ROLE` | Rol fuera del catálogo |
+| `UNKNOWN_ACTION` | Permiso no registrado |
+| `METHOD_DISABLED` | Método ausente o deshabilitado |
+| `PROPERTIES_NOT_ALLOWED` | `fields` enumera las claves rechazadas |
+| `HOOK_ERROR` | `cause` conserva lo lanzado por el hook |
+| `VALIDATION_ERROR` | Fallo inesperado, con su `cause` original |
+
+Los métodos de configuración, registro, sellado y consulta de vistas lanzan excepciones al fallar. No fabrican respuestas `{ result, errors }`. La aplicación traduce los códigos al transporte y decide qué mensajes y causas son aptos para exponer al cliente.
+
+## Vistas de permisos
+
+```js
+const permissionsByRole = pkit.permissions.all;
+const staffPermissions = pkit.permissions.forRole('staff');
+const generalPermissions = pkit.permissions.forRole();
+```
+
+`all` contiene definiciones resueltas agrupadas por rol. `forRole` contiene un mapa plano de `'action.method'` a booleano para los cuatro métodos de cada módulo. Las vistas están congeladas y no tienen prototipo; antes de `seal()` lanzan `NOT_SEALED`.
+
+Entrega al cliente solo el mapa de su rol. Un path ausente debe tratarse como denegado. Estas vistas describen configuración; los hooks y datos de cada petición siguen requiriendo `validate()` en el servidor.
+
+## Tipos de roles
+
+```sh
+pkit generate
+pkit generate --config ./config/roles.mjs --out ./src/pkit.generated.d.ts
+pkit generate --check
+```
+
+El generador importa el config en un proceso aislado y amplía `RoleRegistry` de `endpoint-permissions-kit/types`. El archivo generado debe estar incluido en el programa TypeScript del consumidor. No necesita comentarios para funcionar.
+
+`--check` no escribe: sale con 1 si falta el archivo o está desactualizado. Éxito sale con 0; un comando incorrecto sale con 2; los errores de ejecución salen con 1. El config debe declarar roles sin iniciar servidores ni conexiones.
+
+## Implementación funcional
+
+Las funciones de la librería se declaran con `function` en el ámbito del módulo. No hay arrow functions ni funciones definidas dentro de otras. Los builders vinculan argumentos mediante `bind` y conservan su identidad y alcance al encadenar llamadas o extraer métodos.
+
+Los valores por defecto de parámetros y destructuring se eliminaron. El rol general, la selección completa de campos permitidos y los nombres convencionales del CLI siguen siendo reglas explícitas. Las funciones internas `generate` y `checkGenerated` requieren un objeto de opciones con `cwd`; el binario entrega el directorio real de ejecución.

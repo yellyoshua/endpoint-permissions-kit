@@ -1,83 +1,64 @@
 # Endpoint Permissions Kit
 
-Librería y framework privado para la gestión de permisos en endpoints. Configurado para desarrollo y compilación de TypeScript a JavaScript con soporte híbrido para **ESM (ECMAScript Modules)**, **CommonJS (CJS)**, **IIFE (Browser)** y definiciones de tipos TypeScript (`.d.ts`).
+Librería privada de autorización para endpoints, independiente del framework. Registra permisos en memoria, resuelve roles y campos permitidos, y ejecuta hooks de validación. Distribuye ESM, CommonJS y declaraciones TypeScript.
 
----
+```ts
+import pkit from 'endpoint-permissions-kit';
 
-## 📁 Estructura del Proyecto
+pkit.module('portals').registerActions({
+  find: { enabled: true, properties: ['id', 'name'] },
+});
+pkit.seal();
 
-```text
-endpoint-permissions-kit/
-├── src/                    # Código fuente de la librería
-│   ├── index.ts            # Entrypoint principal (exports)
-│   ├── permissions/        # Módulo gestor de permisos
-│   ├── types/              # Definición de interfaces y tipos
-│   └── utils/              # Funciones auxiliares
-├── tests/                  # Suite de pruebas unitarias (Bun Test)
-│   ├── permission.test.ts  # Pruebas del código fuente
-│   └── build-imports.test.ts # Pruebas de compatibilidad ESM y CommonJS
-├── scripts/
-│   └── build.ts            # Script de compilación multibundle con Bun
-├── dist/                   # Artefactos compilados (generado en build)
-│   ├── esm/                # Salida para import (ES Module)
-│   ├── cjs/                # Salida para require (CommonJS)
-│   ├── iife/               # Bundle autónomo para el navegador
-│   └── types/              # Declaraciones de tipos (.d.ts)
-├── package.json            # Configuración de paquete privado y exports
-├── tsconfig.json           # Configuración principal de TypeScript
-└── tsconfig.build.json     # Configuración para emitir .d.ts
+const validation = await pkit.validate({ action: 'portals', method: 'find' });
 ```
 
----
+Sin rol explícito se usa `general`. Un rol declarado hereda de `general` los métodos que no define; un método explícitamente deshabilitado permanece denegado. Los roles desconocidos nunca reciben ese respaldo.
 
-## 🚀 Comandos Disponibles (BunJS)
+`validate()` devuelve `{ result, errors }`. Los fallos de sus fases, incluidos `NOT_SEALED` e `INVALID_INPUT`, llegan en `errors`; los hooks conservan la causa original. Los errores inesperados incluyen `VALIDATION_ERROR` y `cause`. La aplicación decide cómo traducirlos a HTTP y qué información registrar. Las escrituras requieren `data`; los hooks reciben `undefined` cuando se omiten datos opcionales o contexto.
 
-### Compilar Librería
-Compila el proyecto a ESM, CommonJS, IIFE y genera las declaraciones de tipos `.d.ts`:
-```bash
+## Organización
+
+| Ubicación | Responsabilidad |
+| --- | --- |
+| `src/index.ts`, `src/types.ts` | API pública y contratos |
+| `src/context.ts`, `src/registry.ts` | Catálogo de roles y registro de permisos/hooks |
+| `src/state.ts`, `src/constants.ts`, `src/errors.ts` | Estado compartido, constantes y excepciones |
+| `src/resolve.ts`, `src/seal.ts`, `src/permissions.ts` | Resolución por rol y vistas de permisos |
+| `src/Validators.ts` | Validaciones compartidas de datos, configuración y autorización |
+| `src/validate.ts` | Ejecución de validaciones/hooks y formato de errores |
+| `src/cli/`, `bin/pkit.mjs` | Generador de tipos de roles |
+| `scripts/build.ts` | Compilación ESM/CJS y declaraciones |
+| `tests/`, `tests/typecheck/` | Pruebas funcionales, CLI y contratos de tipos |
+| `docs/architecture.md` | Mapa completo, decisiones y límites |
+| `dist/` | Archivos generados por la compilación |
+
+## Desarrollo
+
+```sh
+bun install
+bun run typecheck
+bun test
 bun run build
 ```
 
-Scripts individuales de compilación:
-```bash
-bun run build:esm    # Compila únicamente a ES Modules (dist/esm)
-bun run build:cjs    # Compila únicamente a CommonJS (dist/cjs)
-bun run build:iife   # Compila paquete bundle navegador (dist/iife)
-bun run build:types  # Genera únicamente archivos .d.ts (dist/types)
+Bun se usa para desarrollo, compilación y pruebas. El paquete compilado usa JavaScript estándar en el núcleo y APIs de Node en el CLI; `package.json` declara Node >=20. Los archivos `.ts` de configuración del CLI necesitan soporte de TypeScript en el runtime: para Node 20 usa un config `.js`, `.mjs` o `.cjs`.
+
+## Consumo
+
+```js
+import pkit from 'endpoint-permissions-kit';
 ```
 
-### Ejecutar Pruebas
-Ejecuta la suite de pruebas unitarias con `bun test`:
-```bash
-bun test
+```js
+const { pkit } = require('endpoint-permissions-kit');
 ```
 
-Modo observación (watch mode):
-```bash
-bun run test:watch
+Para ampliar los roles reconocidos por TypeScript, declara el catálogo en `pkit.config.js` y ejecuta el binario instalado:
+
+```sh
+pkit generate
+pkit generate --check
 ```
 
-### Verificación de Tipos
-Comprueba el tipado de TypeScript sin generar código:
-```bash
-bun run typecheck
-```
-
----
-
-## 📦 Consumo de la Librería
-
-Esta librería soporta todos los sistemas de módulos estándar gracias a la configuración de `exports` en `package.json`:
-
-### 1. ECMAScript Modules (ESM)
-```typescript
-import { createPermissions, PermissionManager } from 'endpoint-permissions-kit';
-```
-
-### 2. CommonJS (CJS)
-```javascript
-const { createPermissions, PermissionManager } = require('endpoint-permissions-kit');
-```
-
-### 3. Bun Native (TypeScript directo)
-Al usar Bun, se resolverá directamente desde `./src/index.ts` con rendimiento nativo.
+Consulta [USAGE.md](USAGE.md) para registrar roles, permisos y hooks; [el mapa de arquitectura](docs/architecture.md) describe cada archivo y el contrato de errores.
