@@ -1,13 +1,36 @@
-export * from './types/index.js';
-export * from './permissions/index.js';
-export * from './utils/index.js';
+import { context } from './context';
+import { defineModule } from './registry';
+import { seal } from './seal';
+import { permissions } from './permissions';
+import { validate } from './validate';
 
-/**
- * Creates a new instance of PermissionManager.
- */
-import { PermissionManager } from './permissions/index.js';
-import type { PermissionOptions } from './types/index.js';
+export type {
+  ActionDef,
+  ActionDefs,
+  Context,
+  Data,
+  FindInput,
+  FindResult,
+  HookFn,
+  Method,
+  PermissionCatalog,
+  PermissionEntry,
+  PkitErrorCode,
+  Properties,
+  ResolvedPermission,
+  Role,
+  RolePermissionMap,
+  RoleRegistry,
+  ValidateInput,
+  ValidateResult,
+  ValidationError,
+  ValidationErrorCode,
+  WriteInput,
+} from './types';
+export { METHODS } from './constants';
+export type { PkitError } from './errors';
+export type { ModuleBuilder, RoleBuilder } from './registry';
+export { context, seal, permissions, validate, defineModule as module };
 
-export function createPermissions(options?: PermissionOptions): PermissionManager {
-  return new PermissionManager(options);
-}
+export const pkit = Object.freeze({ context, module: defineModule, seal, permissions, validate });
+export default pkit;
