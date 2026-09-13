@@ -36,6 +36,7 @@ export function createIdentityMiddleware(source: IdentitySource): RequestHandler
         return;
       }
       res.locals.identity = source.anonymous;
+      res.locals.sessionUser = null;
       next();
       return;
     }
@@ -45,6 +46,7 @@ export function createIdentityMiddleware(source: IdentitySource): RequestHandler
       return;
     }
     res.locals.identity = user;
+    res.locals.sessionUser = user;
     next();
   };
 }

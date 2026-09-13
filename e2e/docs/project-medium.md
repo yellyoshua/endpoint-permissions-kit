@@ -64,10 +64,12 @@ Hooks:
 
 | Scope | Registration | Method | Rule | Message |
 | --- | --- | --- | --- | --- |
-| module | `portals.hook` | `remove` | `context.resource.status === 'published'` denies | `Published portals cannot be removed` |
-| name | `assets.name('update-only').hook` | `update` | `context.resource.status === 'published'` denies | `Published assets cannot be edited` |
-| name + role | `portalsUpdateOnly.role('staff').hook` | `update` | `context.resource.owner !== context.user.id` denies | `Only the owner can update this portal` |
-| name + role | `portalsAll.role('staff').hook` | `find` | only when `permission.authorization.grantedBy` includes `staff::medium.marketing.dashboard::all`; denies unless `context.allowDashboardPortalAccess === true` (server computes it from the store's dashboard portal viewer list) | `Portal access from dashboard is not allowed` |
+| module | `portals.hook` | `remove` | store lookup by `context.params.id`: status `published` denies | `Published portals cannot be removed` |
+| name | `assets.name('update-only').hook` | `update` | store lookup by `context.params.id`: status `published` denies | `Published assets cannot be edited` |
+| name | `assets.name('all').hook` | `remove` | store lookup by `context.params.id`: status `published` denies | `Published assets cannot be removed` |
+| module | `assets.hook` | `create` | data validator: `data.title` missing or blank denies | `Asset title is required` |
+| name + role | `portalsUpdateOnly.role('staff').hook` | `update` | store lookup by `context.params.id`, `owner !== context.user.id` denies | `Only the owner can update this portal` |
+| name + role | `portalsAll.role('staff').hook` | `find` | only when `permission.authorization.grantedBy` includes `staff::medium.marketing.dashboard::all`; denies unless the hook finds `context.user.id` in the store's dashboard portal viewer list | `Portal access from dashboard is not allowed` |
 
 ## Routes
 
@@ -77,15 +79,15 @@ Hooks:
 | `GET /api/medium/catalog` | `<role>::medium.marketing.dashboard::settings` | `find` |
 | `GET /api/medium/marketing/dashboard` | `<role>::medium.marketing.dashboard::all` | `find` |
 | `GET /api/medium/marketing/portals` | `<role>::medium.marketing.portals::all` | `find` (context: user, allowDashboardPortalAccess; `?select=a,b` trimmed) |
-| `DELETE /api/medium/marketing/portals/:id` | `<role>::medium.marketing.portals::all` | `remove` (context: user, resource) |
+| `DELETE /api/medium/marketing/portals/:id` | `<role>::medium.marketing.portals::all` | `remove`  |
 | `GET /api/medium/marketing/portals/editable` | `<role>::medium.marketing.portals::update-only` | `find` |
-| `PATCH /api/medium/marketing/portals/editable/:id` | `<role>::medium.marketing.portals::update-only` | `update` (context: user, resource) |
+| `PATCH /api/medium/marketing/portals/editable/:id` | `<role>::medium.marketing.portals::update-only` | `update`  |
 | `GET /api/medium/campaigns/assets` | `<role>::medium.campaigns.assets::all` | `find` |
 | `POST /api/medium/campaigns/assets` | `<role>::medium.campaigns.assets::all` | `create` |
 | `PATCH /api/medium/campaigns/assets/:id` | `<role>::medium.campaigns.assets::all` | `update` |
 | `DELETE /api/medium/campaigns/assets/:id` | `<role>::medium.campaigns.assets::all` | `remove` |
 | `GET /api/medium/campaigns/assets/editable` | `<role>::medium.campaigns.assets::update-only` | `find` |
-| `PATCH /api/medium/campaigns/assets/editable/:id` | `<role>::medium.campaigns.assets::update-only` | `update` (context: user, resource) |
+| `PATCH /api/medium/campaigns/assets/editable/:id` | `<role>::medium.campaigns.assets::update-only` | `update`  |
 
 ## Screens
 

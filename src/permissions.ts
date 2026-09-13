@@ -40,7 +40,9 @@ function forUser(assignments: UserAssignments): UserPermissionMap {
   return Object.freeze(access) as UserPermissionMap;
 }
 
-export const permissions = Object.defineProperty({ forUser }, 'named', { get: getNamedCatalog, enumerable: true, configurable: true }) as {
+export const permissions = Object.freeze(
+  Object.defineProperty({ forUser }, 'named', { get: getNamedCatalog, enumerable: true, configurable: false }),
+) as {
   readonly named: NamedPermissionCatalog;
-  forUser: typeof forUser;
+  readonly forUser: typeof forUser;
 };

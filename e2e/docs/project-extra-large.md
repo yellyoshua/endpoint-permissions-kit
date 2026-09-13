@@ -107,22 +107,25 @@ Module scope:
 | Module | Method | Kind | Rule | Message |
 | --- | --- | --- | --- | --- |
 | `xl.platform.tenants.members` | `create` | synchronous | `context === undefined` denies (the `/import` variant omits it) | `Member invitations require a tenant context` |
-| `xl.support.tickets.replies` | `create` | asynchronous | `context.ticket.status === 'closed'` denies | `Closed tickets do not accept replies` |
-| `xl.finance.ledger.entries` | `remove` | synchronous | `context.resource.reconciled === true` denies | `Reconciled entries cannot be removed` |
+| `xl.support.tickets.replies` | `create` | asynchronous | store lookup of `tickets` by `data.ticketId`: status `closed` denies | `Closed tickets do not accept replies` |
+| `xl.finance.ledger.entries` | `remove` | synchronous | store lookup by `context.params.id`: `reconciled` denies | `Reconciled entries cannot be removed` |
+| `xl.platform.tenants.settings` | `update` | synchronous, data validator | `data.name` present and blank denies | `Tenant name cannot be blank` |
+| `xl.content.pages.blocks` | `create` | synchronous, data validator | `data.kind` missing or blank denies | `Block kind is required` |
 
 Name scope:
 
 | Name | Method | Kind | Rule | Message |
 | --- | --- | --- | --- | --- |
-| `xl.finance.ledger.entries::all` | `remove` | synchronous | `context.resource.amount > 10000` denies (fails together with the module hook on `le2`) | `Entries above the removal threshold cannot be removed` |
-| `xl.crm.accounts.contacts.notes::all` | `update` | synchronous | `context.resource.author !== context.user.id` denies | `Only the author can edit a contact note` |
-| `xl.analytics.reports::all` | `remove` | asynchronous | `context.resource.pinned === true` denies | `Pinned reports cannot be removed` |
+| `xl.finance.ledger.entries::all` | `remove` | synchronous | store lookup by `context.params.id`: `amount > 10000` denies (fails together with the module hook on `le2`) | `Entries above the removal threshold cannot be removed` |
+| `xl.crm.accounts.contacts.notes::all` | `update` | synchronous | store lookup by `context.params.id`, `author !== context.user.id` denies | `Only the author can edit a contact note` |
+| `xl.analytics.reports::all` | `remove` | asynchronous | store lookup by `context.params.id`: `pinned` denies | `Pinned reports cannot be removed` |
+| `xl.crm.accounts.contacts.notes::all` | `create` | synchronous, data validator | `data.body` missing or blank denies | `Note body is required` |
 
 Name + role scope:
 
 | Name and role | Method | Kind | Rule | Message |
 | --- | --- | --- | --- | --- |
-| `xl.platform.tenants.members::all`, `admin` | `remove` | synchronous | `context.resource.role === 'owner'` denies | `Owner members cannot be removed by an admin` |
+| `xl.platform.tenants.members::all`, `admin` | `remove` | synchronous | store lookup by `context.params.id`: member role `owner` denies | `Owner members cannot be removed by an admin` |
 | `xl.finance.ledger.entries::all`, `finance` | `create` | asynchronous | `data.amount` missing or `<= 0` denies | `Entry amount must be positive` |
 | `xl.support.tickets.replies::all`, `admin` | `find` | synchronous | only when `permission.authorization.direct === false` and `context.isInternalScope === true` | `Granted reply access excludes the internal scope` |
 
@@ -135,17 +138,17 @@ Name + role scope:
 | `PUT /api/extra-large/users/:id/permissions` | `<role>::xl.platform.tenants.settings::all` | `update` with `data: {}`; then `forUser` on the target to reject `PERMISSION_ROLE_MISMATCH`, `UNKNOWN_PERMISSION`, `INVALID_INPUT` before saving |
 | `GET /api/extra-large/platform/tenants/settings` | `<role>::xl.platform.tenants.settings::all` | `find` (`?select=a,b` trimmed) |
 | `POST /api/extra-large/platform/tenants/settings` | same | `create` |
-| `PATCH /api/extra-large/platform/tenants/settings/:id` | same | `update` (context: user, resource) |
-| `DELETE /api/extra-large/platform/tenants/settings/:id` | same | `remove` (context: user, resource) |
+| `PATCH /api/extra-large/platform/tenants/settings/:id` | same | `update`  |
+| `DELETE /api/extra-large/platform/tenants/settings/:id` | same | `remove`  |
 | `GET /api/extra-large/platform/tenants/members` | `<role>::xl.platform.tenants.members::all` | `find` |
 | `POST /api/extra-large/platform/tenants/members` | same | `create` (context: user, tenantIds) |
 | `POST /api/extra-large/platform/tenants/members/import` | same | `create` without context (module hook fails) |
 | `PATCH /api/extra-large/platform/tenants/members/:id` | same | `update` |
-| `DELETE /api/extra-large/platform/tenants/members/:id` | same | `remove` (context: user, resource) |
+| `DELETE /api/extra-large/platform/tenants/members/:id` | same | `remove`  |
 | `GET /api/extra-large/crm/accounts/contacts/notes` | `<role>::xl.crm.accounts.contacts.notes::all` | `find` |
 | `GET /api/extra-large/crm/accounts/contacts/notes/read-only` | `<role>::xl.crm.accounts.contacts.notes::read-only` | `find` |
 | `POST /api/extra-large/crm/accounts/contacts/notes` | `…notes::all` | `create` |
-| `PATCH /api/extra-large/crm/accounts/contacts/notes/:id` | `…notes::all` | `update` (context: user, resource) |
+| `PATCH /api/extra-large/crm/accounts/contacts/notes/:id` | `…notes::all` | `update`  |
 | `DELETE /api/extra-large/crm/accounts/contacts/notes/:id` | `…notes::all` | `remove` |
 | `GET /api/extra-large/support/tickets/replies[?scope=internal]` | `<role>::xl.support.tickets.replies::all` | `find` (context: isInternalScope) |
 | `POST /api/extra-large/support/tickets/replies` | same | `create` (context: user, ticket from `data.ticketId`; unknown ticket → 404) |
@@ -155,7 +158,7 @@ Name + role scope:
 | `GET /api/extra-large/finance/ledger/entries/summary` | `<role>::xl.finance.ledger.entries::summary` | `find` |
 | `POST /api/extra-large/finance/ledger/entries` | `…entries::all` | `create` |
 | `PATCH /api/extra-large/finance/ledger/entries/:id` | `…entries::all` | `update` |
-| `DELETE /api/extra-large/finance/ledger/entries/:id` | `…entries::all` | `remove` (context: user, resource) |
+| `DELETE /api/extra-large/finance/ledger/entries/:id` | `…entries::all` | `remove`  |
 | `GET /api/extra-large/content/pages/published` | `<role>::xl.content.pages::published` | `find` |
 | `GET /api/extra-large/content/pages/blocks` | `<role>::xl.content.pages.blocks::all` | `find` |
 | `POST /api/extra-large/content/pages/blocks` | same | `create` |
@@ -165,7 +168,7 @@ Name + role scope:
 | `GET /api/extra-large/analytics/reports/read-only` | `<role>::xl.analytics.reports::read-only` | `find` |
 | `POST /api/extra-large/analytics/reports` | `…reports::all` | `create` |
 | `PATCH /api/extra-large/analytics/reports/:id` | `…reports::all` | `update` |
-| `DELETE /api/extra-large/analytics/reports/:id` | `…reports::all` | `remove` (context: user, resource) |
+| `DELETE /api/extra-large/analytics/reports/:id` | `…reports::all` | `remove`  |
 
 Writes accept only string, number or boolean values; any other value shape is `400 INVALID_BODY`. Unknown keys are rejected by the library (`PROPERTIES_NOT_ALLOWED`), never discarded.
 

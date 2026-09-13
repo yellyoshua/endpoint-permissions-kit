@@ -1,5 +1,7 @@
 import pkit from 'endpoint-permissions-kit';
 import type { Context, Data, ResolvedPermission } from 'endpoint-permissions-kit';
+import { resourceIdOf, sessionUserIdOf } from '../../server/requestContext';
+import { findAsset, findPortal, isDashboardPortalViewer } from './store';
 
 export const MODULE_PREFIX = 'medium';
 
@@ -18,6 +20,8 @@ export const PUBLISHED_PORTAL_MESSAGE = 'Published portals cannot be removed';
 export const PORTAL_OWNER_MESSAGE = 'Only the owner can update this portal';
 export const DASHBOARD_PORTAL_ACCESS_MESSAGE = 'Portal access from dashboard is not allowed';
 export const PUBLISHED_ASSET_MESSAGE = 'Published assets cannot be edited';
+export const PUBLISHED_ASSET_REMOVAL_MESSAGE = 'Published assets cannot be removed';
+export const ASSET_TITLE_REQUIRED_MESSAGE = 'Asset title is required';
 
 const PORTAL_GRANT_FIELDS = ['id', 'name', 'assetId'];
 
@@ -96,37 +100,46 @@ assetsUpdateOnly.role('intern').registerActions({
   update: { enabled: true, properties: ['title'] },
 });
 
-interface StatusResource {
-  readonly status?: string;
-  readonly owner?: string;
+function targetPortal(context: Context | undefined) {
+  const id = resourceIdOf(context);
+  return id === undefined ? undefined : findPortal(id);
 }
 
-interface HookUser {
-  readonly id?: string;
+function targetAsset(context: Context | undefined) {
+  const id = resourceIdOf(context);
+  return id === undefined ? undefined : findAsset(id);
 }
 
 function checkPublishedPortal(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as StatusResource | undefined;
-  if (resource?.status === 'published') throw new Error(PUBLISHED_PORTAL_MESSAGE);
+  if (targetPortal(context)?.status === 'published') throw new Error(PUBLISHED_PORTAL_MESSAGE);
 }
 
 function checkPortalOwner(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as StatusResource | undefined;
-  const user = context?.user as HookUser | undefined;
-  if (resource?.owner !== user?.id) throw new Error(PORTAL_OWNER_MESSAGE);
+  const portal = targetPortal(context);
+  if (portal !== undefined && portal.owner !== sessionUserIdOf(context)) throw new Error(PORTAL_OWNER_MESSAGE);
 }
 
 function checkDashboardPortalAccess(_data: Data | undefined, context: Context | undefined, permission: ResolvedPermission): void {
   if (!permission.authorization.grantedBy.includes(STAFF_DASHBOARD_ID)) return;
-  if (context?.allowDashboardPortalAccess !== true) throw new Error(DASHBOARD_PORTAL_ACCESS_MESSAGE);
+  const userId = sessionUserIdOf(context);
+  if (userId === undefined || !isDashboardPortalViewer(userId)) throw new Error(DASHBOARD_PORTAL_ACCESS_MESSAGE);
 }
 
 function checkPublishedAsset(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as StatusResource | undefined;
-  if (resource?.status === 'published') throw new Error(PUBLISHED_ASSET_MESSAGE);
+  if (targetAsset(context)?.status === 'published') throw new Error(PUBLISHED_ASSET_MESSAGE);
+}
+
+function checkPublishedAssetRemoval(_data: Data | undefined, context: Context | undefined): void {
+  if (targetAsset(context)?.status === 'published') throw new Error(PUBLISHED_ASSET_REMOVAL_MESSAGE);
+}
+
+function requireAssetTitle(data: Data | undefined): void {
+  if (typeof data?.title !== 'string' || data.title.trim() === '') throw new Error(ASSET_TITLE_REQUIRED_MESSAGE);
 }
 
 portals.hook('remove', checkPublishedPortal);
+assets.hook('create', requireAssetTitle);
+assetsAll.hook('remove', checkPublishedAssetRemoval);
 portalsUpdateOnly.role('staff').hook('update', checkPortalOwner);
 portalsAll.role('staff').hook('find', checkDashboardPortalAccess);
 assetsUpdateOnly.hook('update', checkPublishedAsset);

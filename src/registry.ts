@@ -1,7 +1,7 @@
 import type { ActionDefs, GrantDefs, HookFn, Method, PermissionId, Role } from './types';
 import { GLOBAL_HOOK_OWNER, MODULE_SEPARATOR } from './constants';
 import { getOrCreateState, type ModuleEntry, type NameEntry, type State } from './state';
-import { validateActions, validateGrantActions, validateHook, validateModuleName, validatePermissionName } from './Validators';
+import { validateActions, validateGrantActions, validateHook, validateModuleName, validatePermissionName, validateRoleSegment } from './Validators';
 
 export interface ModuleBuilder {
   module(segment: string): ModuleBuilder;
@@ -90,6 +90,8 @@ function registerNameHook<Builder>(scope: NameScope<Builder>, method: Method, ho
 }
 
 function createRoleBuilder(action: string, name: string, role: string): RoleBuilder {
+  validateRoleSegment(role);
+
   const builder = {} as RoleBuilder;
   const scope = { action, name, role, builder };
 

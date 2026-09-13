@@ -2,6 +2,7 @@ import type { Data } from 'endpoint-permissions-kit';
 import { authorizeFind, authorizeWrite, projectRecord } from '../../server/authorize';
 import { deny, notFound, succeed, type UseCaseResult } from '../../server/errors';
 import type { Identity } from '../../server/identity';
+import type { RequestContext } from '../../server/requestContext';
 import { ALL_NAME, PROFILE_ACTION } from './permissions';
 import { findProfile, replaceProfile, type Profile } from './store';
 
@@ -9,16 +10,18 @@ const PROFILE_ALL = { action: PROFILE_ACTION, name: ALL_NAME };
 
 interface ShowProfileRequest {
   readonly identity: Identity;
+  readonly context: RequestContext;
   readonly select?: readonly string[];
 }
 
 interface UpdateProfileRequest {
   readonly identity: Identity;
+  readonly context: RequestContext;
   readonly data: Data;
 }
 
 export async function showOwnProfile(request: ShowProfileRequest): Promise<UseCaseResult<Data>> {
-  const authorization = await authorizeFind({ guard: PROFILE_ALL, identity: request.identity, select: request.select });
+  const authorization = await authorizeFind({ guard: PROFILE_ALL, identity: request.identity, select: request.select, context: request.context });
   if (!authorization.isAllowed) return deny(authorization.errors);
   const profile = findProfile(request.identity.id);
   if (profile === undefined) return notFound();
@@ -26,7 +29,7 @@ export async function showOwnProfile(request: ShowProfileRequest): Promise<UseCa
 }
 
 export async function updateOwnProfile(request: UpdateProfileRequest): Promise<UseCaseResult<Profile>> {
-  const authorization = await authorizeWrite({ guard: PROFILE_ALL, identity: request.identity, method: 'update', data: request.data });
+  const authorization = await authorizeWrite({ guard: PROFILE_ALL, identity: request.identity, method: 'update', data: request.data, context: request.context });
   if (!authorization.isAllowed) return deny(authorization.errors);
   const existing = findProfile(request.identity.id);
   if (existing === undefined) return notFound();

@@ -2,7 +2,7 @@ import { ALL_FIELDS, GLOBAL_HOOK_OWNER, METHODS, MODULE_SEPARATOR, PERMISSION_ID
 import { pkitError } from './errors';
 import { permissionIdOf, resolveAccess } from './resolve';
 import type { GrantEntry, ModuleEntry, NameEntry, PermissionReference, State } from './state';
-import type { ActionDef, ActionDefs, Context, Data, FindResult, GrantDefs, HookFn, Method, PkitErrorCode, ResolvedPermission, Role, UserAssignments, ValidateInput } from './types';
+import type { ActionDef, ActionDefs, Context, Data, FindInput, FindResult, GrantDefs, HookFn, Method, PkitErrorCode, ResolvedPermission, Role, UserAssignments, ValidateInput } from './types';
 
 interface ValidationFailure {
   code: PkitErrorCode;
@@ -100,15 +100,21 @@ export function validateRoleCatalog(roles: unknown, state: State): asserts roles
     code: 'INVALID_DEFINITION', message: 'roles debe ser un array de strings no vacíos', minimumLength: 1,
   });
 
-  if (roles.includes(GLOBAL_HOOK_OWNER)) {
-    throw pkitError('INVALID_DEFINITION',
-      `"${GLOBAL_HOOK_OWNER}" está reservado para los hooks globales y no puede declararse como rol`,
-    );
-  }
+  if (roles.length === 0) throw pkitError('INVALID_DEFINITION', 'roles debe declarar al menos un rol');
+
+  for (const role of roles) validateRoleSegment(role);
 }
 
 function isCleanSegment(value: string): boolean {
   return value.length > 0 && value.trim() === value && !value.includes(':');
+}
+
+export function validateRoleSegment(role: unknown): asserts role is string {
+  if (typeof role === 'string' && isCleanSegment(role) && role !== GLOBAL_HOOK_OWNER) return;
+
+  throw pkitError('INVALID_DEFINITION',
+    `rol inválido: "${String(role)}" (string no vacío, sin ":" ni espacios en los extremos; "${GLOBAL_HOOK_OWNER}" está reservado para los hooks globales)`,
+  );
 }
 
 export function validateModuleName(moduleName: unknown): asserts moduleName is string {
@@ -144,10 +150,10 @@ export function parsePermissionId(value: unknown, failure: ValidationFailure): P
   return { role, action, name };
 }
 
-function validateMethod(method: unknown, permissionPath: string): asserts method is Method {
+function validateMethod(method: unknown, failure: ValidationFailure): asserts method is Method {
   if ((METHODS as readonly unknown[]).includes(method)) return;
 
-  throw pkitError('INVALID_DEFINITION', `${permissionPath}: método "${String(method)}" no existe. Métodos: ${METHODS.join(', ')}`);
+  throw pkitError(failure.code, `${failure.message}: método "${String(method)}" no existe. Métodos: ${METHODS.join(', ')}`);
 }
 
 function readActionDefinition(definition: unknown, permissionPath: string): ActionDef {
@@ -161,8 +167,16 @@ function readActionDefinition(definition: unknown, permissionPath: string): Acti
   if (properties === ALL_FIELDS) return Object.freeze({ enabled: definition.enabled, properties });
 
   validateStrings(properties, {
-    code: 'INVALID_DEFINITION', message: `${permissionPath}: properties debe ser string[] o '*'`, minimumLength: 0,
+    code: 'INVALID_DEFINITION', message: `${permissionPath}: properties debe ser string[] o '*'`, minimumLength: 1,
   });
+
+  if (properties.includes(ALL_FIELDS)) {
+    throw pkitError('INVALID_DEFINITION', `${permissionPath}: '${ALL_FIELDS}' solo se admite como valor completo de properties`);
+  }
+
+  if (new Set(properties).size !== properties.length) {
+    throw pkitError('INVALID_DEFINITION', `${permissionPath}: properties contiene campos repetidos`);
+  }
 
   return Object.freeze({ enabled: definition.enabled, properties: Object.freeze([...properties]) });
 }
@@ -172,7 +186,7 @@ function readActionDefinitions(actions: unknown, permissionPath: string): Action
 
   const registeredActions: ActionDefs = Object.create(null);
   for (const [method, definition] of Object.entries(actions)) {
-    validateMethod(method, permissionPath);
+    validateMethod(method, { code: 'INVALID_DEFINITION', message: permissionPath });
     registeredActions[method] = readActionDefinition(definition, `${permissionPath}.${method}`);
   }
 
@@ -232,7 +246,7 @@ export function validateHook(hook: unknown, registration: HookRegistration, stat
   if (role !== undefined && role !== GLOBAL_HOOK_OWNER) validateRole(role, state.roles, 'ROLE_NOT_DECLARED');
 
   const permissionPath = name === undefined ? action : `${action}::${name}`;
-  validateMethod(method, permissionPath);
+  validateMethod(method, { code: 'INVALID_DEFINITION', message: permissionPath });
 
   if (typeof hook !== 'function') throw pkitError('INVALID_DEFINITION', `${permissionPath}: hook("${method}") espera una función`);
 }
@@ -289,6 +303,10 @@ function validateRoleHooks(permissionPath: string, nameEntry: NameEntry): void {
 
 export function validateSealedRegistry(modules: ReadonlyMap<string, ModuleEntry>): void {
   for (const [action, registeredModule] of modules) {
+    if (registeredModule.names.size === 0) {
+      throw pkitError('INVALID_DEFINITION', `"${action}" tiene hooks pero ningún nombre con acciones registradas`);
+    }
+
     for (const [name, nameEntry] of registeredModule.names) {
       const permissionPath = `${action}::${name}`;
 
@@ -364,6 +382,7 @@ export function validateRequest(input: ValidateInput, state: State): ValidatedRe
   validateSnapshot(state.snapshot);
 
   const { action, name, method } = input;
+  validateMethod(method, { code: 'INVALID_INPUT', message: 'method es obligatorio' });
   if (method !== 'find' && Object.hasOwn(input, 'select')) throw pkitError('INVALID_INPUT', 'select solo aplica en find');
   if (typeof action !== 'string' || typeof name !== 'string') throw pkitError('INVALID_INPUT', 'action y name son obligatorios');
 
@@ -389,10 +408,10 @@ export function validateRequest(input: ValidateInput, state: State): ValidatedRe
   const permission: ResolvedPermission = Object.freeze({ role, action, name, permissionId, method, enabled: true, properties, authorization });
   const request = { registeredModule, nameEntry, permission, data, context };
 
-  if (input.method === 'find') {
+  if (method === 'find') {
     if (data !== undefined) validateObject(data, { code: 'INVALID_INPUT', message: 'data debe ser un objeto' });
 
-    const { select } = input;
+    const { select } = input as FindInput;
     if (select === undefined) return { ...request, result: properties };
     if (properties === ALL_FIELDS) {
       validateStrings(select, { code: 'INVALID_INPUT', message: 'select debe ser un array de strings', minimumLength: 0 });

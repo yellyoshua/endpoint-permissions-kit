@@ -14,7 +14,7 @@
 4. `bunx tsc --noEmit` — typechecks everything including test fixtures.
 5. `bun test` — runs the four project suites. `bun test src/project-<name>` runs one.
 6. `bun run test` — runs steps 1, 3 (`--check`), 4 and 5 in sequence.
-7. `bun run dev` — starts Express on port 3001 and Vite on port 5173.
+7. `bun run dev` — starts Express on port 3001 with `bun --watch` (full process restart on any server file change; the sealed global registry cannot be hot-reloaded) and Vite on port 5173 with HMR.
 8. `bunx vite build` — builds the client to `dist/` (ignored by git).
 
 ## 3. Folder map
@@ -36,7 +36,8 @@ Identity by `x-user-id` header resolved in the project store; anonymous identity
 
 ## 6. Code rules (condensed)
 
-- Layers: transport (`routes.ts`) decodes and encodes; use cases (`<module>.ts`) authorize before any effect and return `UseCaseResult`; the store never imports `pkit`; the client decides what to show from the `/me` access map only.
+- Layers: transport (`routes.ts`) decodes, builds the request context (`buildRequestContext`) and encodes; use cases (`<module>.ts`) authorize before any effect and return `UseCaseResult`; the store never imports `pkit`; the client decides what to show from the `/me` access map only.
+- Hooks receive the base context `{ user, path, permissions, params }` on every route. A hook that needs a record queries the store itself (by `context.params.id` or a `data` key); use cases never pre-load resources for hooks. Extra server-computed flags are spread over the base context.
 - No comments in code except tool directives (`@ts-expect-error`). No `any`, no `TODO`, no placeholders.
 - Booleans prefixed `is`/`has`/`can` (`enabled` is library contract and stays as is).
 - `camelCase` functions and variables, `PascalCase` types and components, `CONSTANT_CASE` constants. Module-specific functions and components use `export default`; shared helpers and constants use named exports in their own file; React hooks are `use*` with `export default` in their own file.

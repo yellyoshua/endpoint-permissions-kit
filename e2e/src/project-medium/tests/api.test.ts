@@ -49,6 +49,8 @@ const MATRIX: readonly MatrixRow[] = [
   { user: 'ben', method: 'PATCH', path: '/campaigns/assets/a1', body: { status: 'published' }, status: 200 },
   { user: 'ben', method: 'PATCH', path: '/campaigns/assets/a999', body: { status: 'published' }, status: 404, code: 'NOT_FOUND' },
   { user: 'ben', method: 'DELETE', path: '/campaigns/assets/a1', status: 204 },
+  { user: 'ben', method: 'DELETE', path: '/campaigns/assets/a2', status: 403, code: 'HOOK_ERROR' },
+  { user: 'ben', method: 'POST', path: '/campaigns/assets', body: { ...ASSET_BODY, title: ' ' }, status: 403, code: 'HOOK_ERROR' },
   { user: 'ben', method: 'GET', path: '/campaigns/assets/editable', status: 403, code: 'PERMISSION_NOT_ASSIGNED' },
   { user: 'ben', method: 'GET', path: '/catalog', status: 200 },
   { user: 'sam', method: 'GET', path: '/me', status: 200 },

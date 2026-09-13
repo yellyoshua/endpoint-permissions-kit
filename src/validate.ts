@@ -14,6 +14,14 @@ async function invokeHook(hook: HookFn, request: HookCall): Promise<unknown> {
   return hook(request.data, request.context, request.permission);
 }
 
+function describeHookFailure(reason: unknown): string {
+  try {
+    return reason instanceof Error ? reason.message : String(reason);
+  } catch {
+    return 'el hook lanzó un valor que no se puede describir';
+  }
+}
+
 export function validate(input: FindInput): Promise<ValidateResult<FindResult>>;
 export function validate<RequestData extends Data>(input: WriteInput<RequestData>): Promise<ValidateResult<RequestData>>;
 export async function validate(input: ValidateInput): Promise<ValidateResult<FindResult | Data>> {
@@ -40,11 +48,7 @@ export async function validate(input: ValidateInput): Promise<ValidateResult<Fin
       if (hookResult.status === 'fulfilled') continue;
 
       const hookCause: unknown = hookResult.reason;
-      errors.push({
-        code: 'HOOK_ERROR',
-        message: hookCause instanceof Error ? hookCause.message : String(hookCause),
-        cause: hookCause,
-      });
+      errors.push({ code: 'HOOK_ERROR', message: describeHookFailure(hookCause), cause: hookCause });
     }
 
     if (errors.length) return { result: null, errors: Object.freeze(errors) };

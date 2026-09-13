@@ -4,6 +4,7 @@ import { createCatalogHandler } from '../../server/catalogRoute';
 import { invalidBody } from '../../server/errors';
 import { createIdentityMiddleware } from '../../server/identity';
 import meHandler from '../../server/meRoute';
+import { buildRequestContext } from '../../server/requestContext';
 import { HTTP_CREATED, HTTP_NO_CONTENT, HTTP_OK, respond } from '../../server/respond';
 import { createRecord, listRecords, removeRecord, updateRecord, type Resource } from './collection';
 import { importMember, inviteMember } from './members';
@@ -38,7 +39,7 @@ router.get('/catalog', createCatalogHandler({ modulePrefix: MODULE_PREFIX, guard
 
 function mountList(path: string, resource: Resource): void {
   router.get(path, async (req: Request, res: Response) => {
-    respond(res, await listRecords({ resource, identity: res.locals.identity, select: parseSelect(req.query.select) }), HTTP_OK);
+    respond(res, await listRecords({ resource, identity: res.locals.identity, context: buildRequestContext(req, res), select: parseSelect(req.query.select) }), HTTP_OK);
   });
 }
 
@@ -49,7 +50,7 @@ function mountCreate(path: string, resource: Resource): void {
       respond(res, invalidBody(BODY_MUST_BE_OBJECT), HTTP_CREATED);
       return;
     }
-    respond(res, await createRecord({ resource, identity: res.locals.identity, data }), HTTP_CREATED);
+    respond(res, await createRecord({ resource, identity: res.locals.identity, context: buildRequestContext(req, res), data }), HTTP_CREATED);
   });
 }
 
@@ -60,13 +61,13 @@ function mountUpdate(path: string, resource: Resource): void {
       respond(res, invalidBody(BODY_MUST_BE_OBJECT), HTTP_OK);
       return;
     }
-    respond(res, await updateRecord({ resource, identity: res.locals.identity, id: req.params.id, data }), HTTP_OK);
+    respond(res, await updateRecord({ resource, identity: res.locals.identity, context: buildRequestContext(req, res), id: req.params.id, data }), HTTP_OK);
   });
 }
 
 function mountRemove(path: string, resource: Resource): void {
   router.delete(`${path}/:id`, async (req: IdRequest, res: Response) => {
-    respond(res, await removeRecord({ resource, identity: res.locals.identity, id: req.params.id }), HTTP_NO_CONTENT);
+    respond(res, await removeRecord({ resource, identity: res.locals.identity, context: buildRequestContext(req, res), id: req.params.id }), HTTP_NO_CONTENT);
   });
 }
 
@@ -82,7 +83,7 @@ router.post('/platform/tenants/members', async (req, res) => {
     respond(res, invalidBody(BODY_MUST_BE_OBJECT), HTTP_CREATED);
     return;
   }
-  respond(res, await inviteMember({ identity: res.locals.identity, data }), HTTP_CREATED);
+  respond(res, await inviteMember({ identity: res.locals.identity, context: buildRequestContext(req, res), data }), HTTP_CREATED);
 });
 router.post('/platform/tenants/members/import', async (req, res) => {
   const data = asData(req.body);
@@ -90,7 +91,7 @@ router.post('/platform/tenants/members/import', async (req, res) => {
     respond(res, invalidBody(BODY_MUST_BE_OBJECT), HTTP_CREATED);
     return;
   }
-  respond(res, await importMember({ identity: res.locals.identity, data }), HTTP_CREATED);
+  respond(res, await importMember({ identity: res.locals.identity, context: buildRequestContext(req, res), data }), HTTP_CREATED);
 });
 mountUpdate('/platform/tenants/members', MEMBERS_ALL);
 mountRemove('/platform/tenants/members', MEMBERS_ALL);
@@ -103,7 +104,7 @@ mountRemove('/crm/accounts/contacts/notes', NOTES_ALL);
 
 router.get('/support/tickets/replies', async (req, res) => {
   const scope = typeof req.query.scope === 'string' ? req.query.scope : undefined;
-  respond(res, await listReplies({ identity: res.locals.identity, select: parseSelect(req.query.select), scope }), HTTP_OK);
+  respond(res, await listReplies({ identity: res.locals.identity, context: buildRequestContext(req, res), select: parseSelect(req.query.select), scope }), HTTP_OK);
 });
 router.post('/support/tickets/replies', async (req, res) => {
   const data = asData(req.body);
@@ -111,7 +112,7 @@ router.post('/support/tickets/replies', async (req, res) => {
     respond(res, invalidBody(BODY_MUST_BE_OBJECT), HTTP_CREATED);
     return;
   }
-  respond(res, await createReply({ identity: res.locals.identity, data }), HTTP_CREATED);
+  respond(res, await createReply({ identity: res.locals.identity, context: buildRequestContext(req, res), data }), HTTP_CREATED);
 });
 mountUpdate('/support/tickets/replies', REPLIES_ALL);
 mountRemove('/support/tickets/replies', REPLIES_ALL);
@@ -141,7 +142,7 @@ router.put('/users/:id/permissions', async (req, res) => {
     respond(res, invalidBody(BODY_MUST_BE_OBJECT), HTTP_OK);
     return;
   }
-  respond(res, await assignPermissionsToUser({ identity: res.locals.identity, userId: req.params.id, permissions: data.permissions }), HTTP_OK);
+  respond(res, await assignPermissionsToUser({ identity: res.locals.identity, context: buildRequestContext(req, res), userId: req.params.id, permissions: data.permissions }), HTTP_OK);
 });
 
 export default router;

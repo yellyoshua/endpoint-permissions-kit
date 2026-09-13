@@ -3,7 +3,7 @@ import { httpRequest, type HttpResponse } from '../../testing/httpRequest';
 import { startTestServer, type RunningServer } from '../../testing/testServer';
 import type { ErrorBody } from '../../server/errors';
 import type { MeResponse } from '../../server/meRoute';
-import { DUPLICATE_TAG_MESSAGE, PINNED_NOTE_MESSAGE } from '../server/permissions';
+import { BLANK_DISPLAY_NAME_MESSAGE, DUPLICATE_TAG_MESSAGE, FOREIGN_NOTE_AUTHOR_MESSAGE, FOREIGN_NOTE_UPDATE_MESSAGE, NOTE_TITLE_REQUIRED_MESSAGE, PINNED_NOTE_MESSAGE } from '../server/permissions';
 import { seed } from '../server/store';
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -32,8 +32,15 @@ const MATRIX: readonly MatrixRow[] = [
   { user: 'mia', method: 'GET', path: '/notes', status: 200 },
   { user: 'mia', method: 'GET', path: '/notes/published', status: 403, code: 'PERMISSION_NOT_ASSIGNED' },
   { user: 'mia', method: 'POST', path: '/notes', body: NOTE_BODY, status: 201 },
-  { user: 'mia', method: 'PATCH', path: '/notes/n2', body: { title: 'Edited' }, status: 200 },
-  { user: 'mia', method: 'PATCH', path: '/notes/n2', body: { pinned: true }, status: 403, code: 'PROPERTIES_NOT_ALLOWED' },
+  { user: 'mia', method: 'PATCH', path: '/notes/n1', body: { title: 'Edited' }, status: 200 },
+  { user: 'mia', method: 'PATCH', path: '/notes/n1', body: { title: '   ' }, status: 403, code: 'HOOK_ERROR' },
+  { user: 'mia', method: 'PATCH', path: '/notes/n1', body: { body: 'only body' }, status: 200 },
+  { user: 'mia', method: 'PATCH', path: '/notes/n2', body: { title: 'Edited' }, status: 403, code: 'HOOK_ERROR' },
+  { user: 'mia', method: 'POST', path: '/notes', body: { body: 'no title' }, status: 403, code: 'HOOK_ERROR' },
+  { user: 'mia', method: 'POST', path: '/notes', body: { ...NOTE_BODY, author: 'mia' }, status: 201 },
+  { user: 'mia', method: 'POST', path: '/notes', body: { ...NOTE_BODY, author: 'eli' }, status: 403, code: 'HOOK_ERROR' },
+  { user: 'mia', method: 'PATCH', path: '/profile', body: { displayName: '' }, status: 403, code: 'HOOK_ERROR' },
+  { user: 'mia', method: 'PATCH', path: '/notes/n1', body: { pinned: true }, status: 403, code: 'PROPERTIES_NOT_ALLOWED' },
   { user: 'mia', method: 'PATCH', path: '/notes/n999', body: { title: 'Edited' }, status: 404, code: 'NOT_FOUND' },
   { user: 'mia', method: 'DELETE', path: '/notes/n2', status: 403, code: 'METHOD_DISABLED' },
   { user: 'mia', method: 'GET', path: '/tags', status: 200 },
@@ -46,6 +53,7 @@ const MATRIX: readonly MatrixRow[] = [
   { user: 'eli', method: 'GET', path: '/notes', status: 200 },
   { user: 'eli', method: 'POST', path: '/notes', body: { ...NOTE_BODY, pinned: true }, status: 201 },
   { user: 'eli', method: 'PATCH', path: '/notes/n2', body: { pinned: true }, status: 200 },
+  { user: 'eli', method: 'PATCH', path: '/notes/n1', body: { title: 'Editor edit' }, status: 200 },
   { user: 'eli', method: 'DELETE', path: '/notes/n2', status: 204 },
   { user: 'eli', method: 'DELETE', path: '/notes/n1', status: 403, code: 'HOOK_ERROR' },
   { user: 'eli', method: 'DELETE', path: '/notes/n999', status: 404, code: 'NOT_FOUND' },
@@ -128,20 +136,36 @@ describe('small: find projections', () => {
 
 describe('small: write contract', () => {
   test('PROPERTIES_NOT_ALLOWED lists the rejected fields', async () => {
-    const response = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/notes/n2', method: 'PATCH', userId: 'mia', body: { title: 'x', pinned: true, author: 'me' } });
+    const response = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/notes/n1', method: 'PATCH', userId: 'mia', body: { title: 'x', pinned: true, secret: 'me' } });
     expect(response.status).toBe(403);
-    expect(response.body.error.fields).toEqual(['pinned', 'author']);
+    expect(response.body.error.fields).toEqual(['pinned', 'secret']);
   });
 
   test('a denied write leaves the store untouched', async () => {
-    await httpRequest({ baseUrl: server.baseUrl, path: '/api/small/notes/n2', method: 'PATCH', userId: 'mia', body: { title: 'x', pinned: true } });
+    await httpRequest({ baseUrl: server.baseUrl, path: '/api/small/notes/n1', method: 'PATCH', userId: 'mia', body: { title: 'x', pinned: true } });
     const after = await httpRequest<readonly { id: string; title: string }[]>({ baseUrl: server.baseUrl, path: '/api/small/notes', userId: 'mia' });
-    expect(after.body.find((note) => note.id === 'n2')?.title).toBe('Retro');
+    expect(after.body.find((note) => note.id === 'n1')?.title).toBe('Kickoff');
   });
 
   test('synchronous module hook denies removing a pinned note with a stable reason', async () => {
     const response = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/notes/n1', method: 'DELETE', userId: 'eli' });
     expect(response.body).toEqual({ error: { code: 'HOOK_ERROR', reasons: [PINNED_NOTE_MESSAGE] } });
+  });
+
+  test('ownership hooks: members edit only their notes, editors edit any; author in create must be own id', async () => {
+    const foreignUpdate = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/notes/n2', method: 'PATCH', userId: 'mia', body: { title: 'x' } });
+    expect(foreignUpdate.body).toEqual({ error: { code: 'HOOK_ERROR', reasons: [FOREIGN_NOTE_UPDATE_MESSAGE] } });
+    const editorUpdate = await httpRequest({ baseUrl: server.baseUrl, path: '/api/small/notes/n1', method: 'PATCH', userId: 'eli', body: { title: 'x' } });
+    expect(editorUpdate.status).toBe(200);
+    const foreignAuthor = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/notes', method: 'POST', userId: 'mia', body: { ...NOTE_BODY, author: 'eli' } });
+    expect(foreignAuthor.body).toEqual({ error: { code: 'HOOK_ERROR', reasons: [FOREIGN_NOTE_AUTHOR_MESSAGE] } });
+  });
+
+  test('data validator hooks report the field rule as the reason', async () => {
+    const note = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/notes', method: 'POST', userId: 'eli', body: { body: 'untitled' } });
+    expect(note.body).toEqual({ error: { code: 'HOOK_ERROR', reasons: [NOTE_TITLE_REQUIRED_MESSAGE] } });
+    const profile = await httpRequest<ErrorBody>({ baseUrl: server.baseUrl, path: '/api/small/profile', method: 'PATCH', userId: 'eli', body: { displayName: ' ' } });
+    expect(profile.body).toEqual({ error: { code: 'HOOK_ERROR', reasons: [BLANK_DISPLAY_NAME_MESSAGE] } });
   });
 
   test('asynchronous module hook denies duplicate tag labels', async () => {

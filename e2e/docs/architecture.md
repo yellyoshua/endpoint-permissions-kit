@@ -41,7 +41,25 @@ Union declared in `pkit.config.ts` (17 roles): accountant, admin, agent, analyst
 | domain rules | hooks in `project-*/server/permissions.ts` | resource and user data passed as `context` |
 | persistence | `project-*/server/store.ts` | `Map`s, `seed()`, `reset()`; never imports `pkit` |
 
-Flow of a use case: the route decodes params/body and calls the use case; the use case calls `authorizeFind` or `authorizeWrite` with the static `{ action, name }` guard, the identity from `res.locals`, `data`, `select` and the hook `context`; a non-empty `errors` returns `deny(errors)` before touching the store; on `find` the use case projects records with `projectRecord(record, result)`; on writes it applies `data` to the store. The route hands the `UseCaseResult` to `respond(res, result, status)`.
+Flow of a use case: the route decodes params/body, builds the request context with `buildRequestContext(req, res)` and calls the use case; the use case calls `authorizeFind` or `authorizeWrite` with the static `{ action, name }` guard, the identity from `res.locals`, `data`, `select` and that context; a non-empty `errors` returns `deny(errors)` before touching the store; on `find` the use case projects records with `projectRecord(record, result)`; on writes it loads the target after authorization (404 if missing) and applies `data`. The route hands the `UseCaseResult` to `respond(res, result, status)`.
+
+## Request context for hooks (`src/server/requestContext.ts`)
+
+Every route passes the same base context to `validate()`, so every hook receives it:
+
+| Field | Value |
+| --- | --- |
+| `user` | the session identity `{ id, role, permissions }`, or `null` for the anonymous identity |
+| `path` | the accessed path, e.g. `/api/small/notes/n1` |
+| `permissions` | the identifier list used for the authorization (anonymous: the fixed public list) |
+| `params` | the route params, e.g. `{ id: 'n1' }` |
+
+Rules:
+
+- Use cases never load a resource to feed a hook. A hook that needs a record (ownership, status, locks) queries the project store itself using `context.params.id` (helpers `resourceIdOf`, `sessionUserIdOf`) or a key from `data` (e.g. `data.ticketId`). A missing record makes the hook skip; the use case answers `404` afterwards.
+- Server-computed request flags that are not stored data stay in the context on top of the base: `revealGrantSources` (large, route `/sales/orders/lines/sources`) and `isInternalScope` (extra-large, `?scope=internal`). They are spread over the base context, never replace it.
+- One deliberate exception: `POST /api/extra-large/platform/tenants/members/import` calls its use case without any context to prove the library reports a hook that requires context as `HOOK_ERROR`.
+- Hooks live in `permissions.ts` and import the store directly; `store.ts` still never imports `pkit`.
 
 ## Identity contract
 
@@ -136,7 +154,7 @@ Scope: src/project-large/client/ResourceScreen.tsx, src/project-extra-large/clie
 Expiration or review date: review if a fifth project is added.
 Risks: a bug in the generic screen affects every screen of that project.
 Required safeguards: screens.test.ts and api.test.ts per project cover every screen and route.
-Approved by: main agent (phase 3), pending user confirmation.
+Approved by: user, 2026-09-12 (second delivery).
 ```
 
 ```txt
@@ -148,15 +166,23 @@ Scope: src/project-small/**, docs/project-small.md.
 Expiration or review date: not applicable.
 Risks: none beyond the deviation from the phase plan.
 Required safeguards: the same phase 4 review applies to all four projects.
-Approved by: main agent, pending user confirmation.
+Approved by: user, 2026-09-12 (second delivery).
 ```
 
 ## Phase 4 review findings
 
 | Finding | Verdict | Status |
 | --- | --- | --- |
-| `seed()` runs at module load in every `store.ts` (reviewer asked to remove it) | OBSERVACIÓN | kept: `bun run dev` needs seeded data without tests; tests still call `reset()` + `seed()` in `beforeEach`; no section 8 rule forbids module-load seeding |
-| Use cases in `<module>.ts` use named exports instead of `export default` (NT-6) | OBSERVACIÓN | kept: the prompt fixes one file per module with several use cases; a default-exported object would hide the functions behind a namespace |
-| `seed()` in large and extra-large stores exceeds ~30 lines (FN-2) | OBSERVACIÓN | kept: declarative fixture data, no branching |
+| `seed()` runs at module load in every `store.ts` (reviewer asked to remove it) | OBSERVACIÓN | kept (approved by user 2026-09-12): `bun run dev` needs seeded data without tests; tests still call `reset()` + `seed()` in `beforeEach`; no section 8 rule forbids module-load seeding |
+| Use cases in `<module>.ts` use named exports instead of `export default` (NT-6) | OBSERVACIÓN | kept (approved by user 2026-09-12): the prompt fixes one file per module with several use cases; a default-exported object would hide the functions behind a namespace |
+| `seed()` in large and extra-large stores exceeds ~30 lines (FN-2) | OBSERVACIÓN | kept (approved by user 2026-09-12): declarative fixture data, no branching |
 | Shared layer (`src/server`, `src/client`, `scripts`) | no findings | — |
 | project-large, project-extra-large | no INCUMPLIMIENTO | — |
+
+## Development reload
+
+`bun run dev` starts the API with `bun --watch src/server/index.ts`: every change under `src/server` or `src/project-*/server` restarts the whole process. A full restart is required, not hot module replacement: the library keeps its registry in `globalThis[Symbol.for('endpoint-permissions-kit')]`, seals it once and exposes no reset, so re-evaluating a `permissions.ts` inside a live process would throw `SEALED` or `DUPLICATE_REGISTRATION`. Vite keeps HMR for the client.
+
+## Library documentation finding (proposed upstream, not applied)
+
+`USAGE.md`, table "Con las definiciones del ejemplo", row 5 (`admin`, only dashboard → portals `update-only`, `find` → `id, name, assetId`) is not reachable with the example code, which only declares `portalsUpdateOnly.grantTo('staff::marketing.dashboard::all')`. Either add `portalsUpdateOnly.grantTo('admin::marketing.dashboard::all').registerActions({ find: { enabled: true, properties: ['id', 'name', 'assetId'] } })` to the example, or change the row to `PERMISSION_NOT_ASSIGNED`. project-medium declares that grant so the row passes literally.

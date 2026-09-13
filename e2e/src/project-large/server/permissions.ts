@@ -1,5 +1,7 @@
 import pkit from 'endpoint-permissions-kit';
 import type { Context, Data, ResolvedPermission } from 'endpoint-permissions-kit';
+import { resourceIdOf, sessionUserIdOf } from '../../server/requestContext';
+import { findOrder, findStock } from './store';
 
 export const MODULE_PREFIX = 'large';
 
@@ -19,6 +21,10 @@ export const CLOSED_ORDER_MESSAGE = 'Closed orders cannot be updated';
 export const NOT_ORDER_OWNER_MESSAGE = 'Only the owner can update this order';
 export const LOCKED_STOCK_MESSAGE = 'Derived access cannot update stock of a locked warehouse';
 export const GRANT_SOURCES_PREFIX = 'granted by: ';
+export const NEGATIVE_ITEM_PRICE_MESSAGE = 'Item price and cost cannot be negative';
+export const NEGATIVE_STOCK_MESSAGE = 'Stock quantity cannot be negative';
+export const NON_POSITIVE_INVOICE_MESSAGE = 'Invoice amount must be positive';
+export const NON_POSITIVE_SALARY_MESSAGE = 'Salary must be positive';
 
 const root = pkit.module(MODULE_PREFIX);
 const items = root.module('inventory').module('items');
@@ -171,21 +177,24 @@ invoicesAll.grantTo('manager::large.sales.orders::summary').registerActions({
   find: { enabled: true, properties: ['id', 'orderId', 'status'] },
 });
 
+function targetOrder(context: Context | undefined) {
+  const id = resourceIdOf(context);
+  return id === undefined ? undefined : findOrder(id);
+}
+
 function rejectClosedOrderUpdate(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as { status?: string } | undefined;
-  if (resource?.status === 'closed') throw new Error(CLOSED_ORDER_MESSAGE);
+  if (targetOrder(context)?.status === 'closed') throw new Error(CLOSED_ORDER_MESSAGE);
 }
 
 function rejectForeignOrderUpdate(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as { owner?: string } | undefined;
-  const user = context?.user as { id?: string } | undefined;
-  if (resource?.owner !== user?.id) throw new Error(NOT_ORDER_OWNER_MESSAGE);
+  const order = targetOrder(context);
+  if (order !== undefined && order.owner !== sessionUserIdOf(context)) throw new Error(NOT_ORDER_OWNER_MESSAGE);
 }
 
 function rejectDerivedLockedStockUpdate(_data: Data | undefined, context: Context | undefined, permission: ResolvedPermission): void {
   if (permission.authorization.direct) return;
-  const resource = context?.resource as { isLocked?: boolean } | undefined;
-  if (resource?.isLocked === true) throw new Error(LOCKED_STOCK_MESSAGE);
+  const id = resourceIdOf(context);
+  if (id !== undefined && findStock(id)?.isLocked === true) throw new Error(LOCKED_STOCK_MESSAGE);
 }
 
 function revealDerivedLineSources(_data: Data | undefined, context: Context | undefined, permission: ResolvedPermission): void {
@@ -194,6 +203,35 @@ function revealDerivedLineSources(_data: Data | undefined, context: Context | un
   throw new Error(`${GRANT_SOURCES_PREFIX}${permission.authorization.grantedBy.join(', ')}`);
 }
 
+function isNegativeNumber(value: unknown): boolean {
+  return typeof value === 'number' && value < 0;
+}
+
+function rejectNegativeItemPrices(data: Data | undefined): void {
+  if (isNegativeNumber(data?.price) || isNegativeNumber(data?.cost)) throw new Error(NEGATIVE_ITEM_PRICE_MESSAGE);
+}
+
+function rejectNegativeStockQuantity(data: Data | undefined): void {
+  if (isNegativeNumber(data?.quantity)) throw new Error(NEGATIVE_STOCK_MESSAGE);
+}
+
+function requirePositiveInvoiceAmount(data: Data | undefined): void {
+  if (typeof data?.amount !== 'number' || data.amount <= 0) throw new Error(NON_POSITIVE_INVOICE_MESSAGE);
+}
+
+function rejectNonPositiveSalary(data: Data | undefined): void {
+  if (data !== undefined && 'salary' in data && (typeof data.salary !== 'number' || data.salary <= 0)) {
+    throw new Error(NON_POSITIVE_SALARY_MESSAGE);
+  }
+}
+
+items.hook('create', rejectNegativeItemPrices);
+items.hook('update', rejectNegativeItemPrices);
+stock.hook('create', rejectNegativeStockQuantity);
+stock.hook('update', rejectNegativeStockQuantity);
+employees.hook('create', rejectNonPositiveSalary);
+employees.hook('update', rejectNonPositiveSalary);
+invoicesAll.role('accountant').hook('create', requirePositiveInvoiceAmount);
 orders.hook('update', rejectClosedOrderUpdate);
 ordersAll.hook('update', rejectForeignOrderUpdate);
 stockAll.role('warehouse').hook('update', rejectDerivedLockedStockUpdate);

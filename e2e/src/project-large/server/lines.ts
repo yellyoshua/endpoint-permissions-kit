@@ -2,6 +2,7 @@ import type { Data } from 'endpoint-permissions-kit';
 import { authorizeFind, authorizeWrite, projectRecord } from '../../server/authorize';
 import { deny, notFound, succeed, type UseCaseResult } from '../../server/errors';
 import type { Identity } from '../../server/identity';
+import type { RequestContext } from '../../server/requestContext';
 import { ALL_NAME, LINES_ACTION } from './permissions';
 import { deleteLine, findLine, insertLine, listLines, replaceLine, type Line } from './store';
 
@@ -9,11 +10,13 @@ const LINES_ALL = { action: LINES_ACTION, name: ALL_NAME };
 
 interface ListLinesRequest {
   readonly identity: Identity;
+  readonly context: RequestContext;
   readonly select?: readonly string[];
 }
 
 interface LineWriteRequest {
   readonly identity: Identity;
+  readonly context: RequestContext;
   readonly data: Data;
 }
 
@@ -23,23 +26,24 @@ interface LineUpdateRequest extends LineWriteRequest {
 
 interface LineRemoveRequest {
   readonly identity: Identity;
+  readonly context: RequestContext;
   readonly id: string;
 }
 
 export async function listAllLines(request: ListLinesRequest): Promise<UseCaseResult<readonly Data[]>> {
-  const authorization = await authorizeFind({ guard: LINES_ALL, identity: request.identity, select: request.select });
+  const authorization = await authorizeFind({ guard: LINES_ALL, identity: request.identity, select: request.select, context: request.context });
   if (!authorization.isAllowed) return deny(authorization.errors);
   return succeed(listLines().map((line) => projectRecord(line, authorization.result)));
 }
 
 export async function listLinesRevealingSources(request: ListLinesRequest): Promise<UseCaseResult<readonly Data[]>> {
-  const authorization = await authorizeFind({ guard: LINES_ALL, identity: request.identity, select: request.select, context: { revealGrantSources: true } });
+  const authorization = await authorizeFind({ guard: LINES_ALL, identity: request.identity, select: request.select, context: { ...request.context, revealGrantSources: true } });
   if (!authorization.isAllowed) return deny(authorization.errors);
   return succeed(listLines().map((line) => projectRecord(line, authorization.result)));
 }
 
 export async function createLine(request: LineWriteRequest): Promise<UseCaseResult<Line>> {
-  const authorization = await authorizeWrite({ guard: LINES_ALL, identity: request.identity, method: 'create', data: request.data });
+  const authorization = await authorizeWrite({ guard: LINES_ALL, identity: request.identity, method: 'create', data: request.data, context: request.context });
   if (!authorization.isAllowed) return deny(authorization.errors);
   const created = insertLine({
     orderId: String(authorization.result.orderId ?? ''),
@@ -51,10 +55,10 @@ export async function createLine(request: LineWriteRequest): Promise<UseCaseResu
 }
 
 export async function updateLine(request: LineUpdateRequest): Promise<UseCaseResult<Line>> {
+  const authorization = await authorizeWrite({ guard: LINES_ALL, identity: request.identity, method: 'update', data: request.data, context: request.context });
+  if (!authorization.isAllowed) return deny(authorization.errors);
   const existing = findLine(request.id);
   if (existing === undefined) return notFound();
-  const authorization = await authorizeWrite({ guard: LINES_ALL, identity: request.identity, method: 'update', data: request.data });
-  if (!authorization.isAllowed) return deny(authorization.errors);
   const updated: Line = {
     ...existing,
     quantity: typeof authorization.result.quantity === 'number' ? authorization.result.quantity : existing.quantity,
@@ -66,7 +70,7 @@ export async function updateLine(request: LineUpdateRequest): Promise<UseCaseRes
 
 export async function removeLine(request: LineRemoveRequest): Promise<UseCaseResult<undefined>> {
   if (findLine(request.id) === undefined) return notFound();
-  const authorization = await authorizeWrite({ guard: LINES_ALL, identity: request.identity, method: 'remove', data: { id: request.id } });
+  const authorization = await authorizeWrite({ guard: LINES_ALL, identity: request.identity, method: 'remove', data: { id: request.id }, context: request.context });
   if (!authorization.isAllowed) return deny(authorization.errors);
   deleteLine(request.id);
   return succeed(undefined);

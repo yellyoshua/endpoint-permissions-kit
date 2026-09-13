@@ -32,7 +32,7 @@ function resolveDirectAccess(nameEntry: NameEntry, role: string, method: Method)
 
 function resolveGrantedAccess(nameEntry: NameEntry, method: Method, assigned: ReadonlySet<string>): Access {
   const grantedBy: PermissionId[] = [];
-  const properties: string[] = [];
+  const properties = new Set<string>();
   let reachable = false;
 
   for (const [enablingId, grant] of nameEntry.grants) {
@@ -43,14 +43,12 @@ function resolveGrantedAccess(nameEntry: NameEntry, method: Method, assigned: Re
     if (!definition) continue;
 
     grantedBy.push(enablingId as PermissionId);
-    for (const field of definition.properties) {
-      if (!properties.includes(field)) properties.push(field);
-    }
+    for (const field of definition.properties) properties.add(field);
   }
 
   if (grantedBy.length === 0) return reachable ? DISABLED_ACCESS : UNASSIGNED_ACCESS;
 
   const authorization: Authorization = Object.freeze({ direct: false, grantedBy: Object.freeze(grantedBy.sort()) });
 
-  return { status: 'granted', properties: Object.freeze(properties), authorization };
+  return { status: 'granted', properties: Object.freeze([...properties]), authorization };
 }

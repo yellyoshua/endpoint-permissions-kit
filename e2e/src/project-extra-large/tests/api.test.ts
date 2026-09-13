@@ -61,6 +61,7 @@ const MATRIX: readonly MatrixRow[] = [
   { user: 'olivia', method: 'GET', path: SETTINGS, status: 200 },
   { user: 'olivia', method: 'POST', path: SETTINGS, body: { ...TENANT_BODY, apiKey: 'k' }, status: 201 },
   { user: 'olivia', method: 'PATCH', path: `${SETTINGS}/tn1`, body: { apiKey: 'rotated' }, status: 200 },
+  { user: 'olivia', method: 'PATCH', path: `${SETTINGS}/tn1`, body: { name: ' ' }, status: 403, code: 'HOOK_ERROR' },
   { user: 'olivia', method: 'DELETE', path: `${SETTINGS}/tn2`, status: 204 },
   { user: 'olivia', method: 'DELETE', path: `${SETTINGS}/tn99`, status: 404, code: 'NOT_FOUND' },
   { user: 'olivia', method: 'GET', path: MEMBERS, status: 200 },
@@ -79,6 +80,7 @@ const MATRIX: readonly MatrixRow[] = [
   { user: 'olivia', method: 'DELETE', path: `${ENTRIES}/le3`, status: 403, code: 'HOOK_ERROR' },
   { user: 'olivia', method: 'GET', path: BLOCKS, status: 200 },
   { user: 'olivia', method: 'POST', path: BLOCKS, body: { ...BLOCK_BODY, draft: true }, status: 201 },
+  { user: 'olivia', method: 'POST', path: BLOCKS, body: { pageId: 'pg1', text: 'no kind' }, status: 403, code: 'HOOK_ERROR' },
   { user: 'olivia', method: 'GET', path: REPORTS, status: 200 },
   { user: 'olivia', method: 'POST', path: REPORTS, body: REPORT_BODY, status: 403, code: 'METHOD_DISABLED' },
   { user: 'olivia', method: 'PATCH', path: `${REPORTS}/rt1`, body: { pinned: false }, status: 200 },
@@ -133,6 +135,7 @@ const MATRIX: readonly MatrixRow[] = [
 
   { user: 'gus', method: 'GET', path: NOTES, status: 200 },
   { user: 'gus', method: 'POST', path: NOTES, body: NOTE_BODY, status: 201 },
+  { user: 'gus', method: 'POST', path: NOTES, body: { contactId: 'c1', body: '' }, status: 403, code: 'HOOK_ERROR' },
   { user: 'gus', method: 'PATCH', path: `${NOTES}/cn1`, body: { body: 'Edited' }, status: 200 },
   { user: 'gus', method: 'PATCH', path: `${NOTES}/cn2`, body: { body: 'Edited' }, status: 403, code: 'HOOK_ERROR' },
   { user: 'gus', method: 'PATCH', path: `${NOTES}/cn1`, body: { author: 'gia' }, status: 403, code: 'PROPERTIES_NOT_ALLOWED' },
@@ -214,7 +217,7 @@ const MATRIX: readonly MatrixRow[] = [
   { user: 'ghost', method: 'GET', path: PUBLISHED, status: 401, code: 'UNKNOWN_USER' },
 
   { user: 'gus', method: 'POST', path: NOTES, body: 'not-an-object', status: 400, code: 'INVALID_BODY' },
-  { user: 'gus', method: 'POST', path: NOTES, body: { ...NOTE_BODY, body: { nested: true } }, status: 400, code: 'INVALID_BODY' },
+  { user: 'gus', method: 'POST', path: NOTES, body: { ...NOTE_BODY, contactId: { nested: true } }, status: 400, code: 'INVALID_BODY' },
 ];
 
 let server: RunningServer;

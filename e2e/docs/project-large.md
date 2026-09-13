@@ -79,9 +79,13 @@ The cycle is `orders all ⇄ invoices all`: each grant resolves on its own. Gran
 
 | Scope | Registration | Method | Rule | Message |
 | --- | --- | --- | --- | --- |
-| module | `large.sales.orders` | `update` | `context.resource.status === 'closed'` denies (runs for `all` and `update-only`) | `Closed orders cannot be updated` |
-| name | `large.sales.orders::all` | `update` | ownership: `context.resource.owner !== context.user.id` denies | `Only the owner can update this order` |
-| name + role | `large.inventory.warehouses.stock::all` + `warehouse` | `update` | acts only when `permission.authorization.direct === false`; denies if `context.resource.isLocked` | `Derived access cannot update stock of a locked warehouse` |
+| module | `large.sales.orders` | `update` | store lookup by `context.params.id`: status `closed` denies (runs for `all` and `update-only`) | `Closed orders cannot be updated` |
+| name | `large.sales.orders::all` | `update` | ownership: store lookup by `context.params.id`, `owner !== context.user.id` denies | `Only the owner can update this order` |
+| name + role | `large.inventory.warehouses.stock::all` + `warehouse` | `update` | acts only when `permission.authorization.direct === false`; denies if the stock row found by `context.params.id` is locked | `Derived access cannot update stock of a locked warehouse` |
+| module | `large.inventory.items` | `create`, `update` | data validator: negative `data.price` or `data.cost` denies | `Item price and cost cannot be negative` |
+| module | `large.inventory.warehouses.stock` | `create`, `update` | data validator: negative `data.quantity` denies | `Stock quantity cannot be negative` |
+| module | `large.hr.employees` | `create`, `update` | data validator: `data.salary` present and not a positive number denies | `Salary must be positive` |
+| name + role | `large.billing.invoices::all` + `accountant` | `create` | data validator: `data.amount` missing or `<= 0` denies | `Invoice amount must be positive` |
 | name + role | `large.sales.orders.lines::all` + `sales` | `find` | acts only when `direct === false` and the server passed `context.revealGrantSources: true` (route `/sales/orders/lines/sources`); throws the sorted `grantedBy` | `granted by: <id>, <id>` |
 
 `sam PATCH /sales/orders/o2` (closed, owned by `sue`) fails the module hook and the name hook at once; `reasons` is `[closed, owner]` in registration order.
@@ -100,14 +104,14 @@ The cycle is `orders all ⇄ invoices all`: each grant resolves on its own. Gran
 | `DELETE /api/large/inventory/items/:id` | `<role>::large.inventory.items::all` | `remove` |
 | `GET /api/large/inventory/warehouses/stock` | `<role>::large.inventory.warehouses.stock::all` | `find` |
 | `POST /api/large/inventory/warehouses/stock` | `<role>::large.inventory.warehouses.stock::all` | `create` |
-| `PATCH /api/large/inventory/warehouses/stock/:id` | `<role>::large.inventory.warehouses.stock::all` | `update` (context: user, resource) |
+| `PATCH /api/large/inventory/warehouses/stock/:id` | `<role>::large.inventory.warehouses.stock::all` | `update`  |
 | `GET /api/large/sales/orders` | `<role>::large.sales.orders::all` | `find` |
 | `POST /api/large/sales/orders` | `<role>::large.sales.orders::all` | `create` (owner = identity, status `open`) |
-| `PATCH /api/large/sales/orders/:id` | `<role>::large.sales.orders::all` | `update` (context: user, resource) |
-| `DELETE /api/large/sales/orders/:id` | `<role>::large.sales.orders::all` | `remove` (context: user, resource) |
+| `PATCH /api/large/sales/orders/:id` | `<role>::large.sales.orders::all` | `update`  |
+| `DELETE /api/large/sales/orders/:id` | `<role>::large.sales.orders::all` | `remove`  |
 | `GET /api/large/sales/orders/summary` | `<role>::large.sales.orders::summary` | `find` |
 | `GET /api/large/sales/orders/status` | `<role>::large.sales.orders::update-only` | `find` |
-| `PATCH /api/large/sales/orders/status/:id` | `<role>::large.sales.orders::update-only` | `update` (context: user, resource) |
+| `PATCH /api/large/sales/orders/status/:id` | `<role>::large.sales.orders::update-only` | `update`  |
 | `GET /api/large/sales/orders/lines` | `<role>::large.sales.orders.lines::all` | `find` |
 | `GET /api/large/sales/orders/lines/sources` | `<role>::large.sales.orders.lines::all` | `find` (context: `revealGrantSources: true`) |
 | `POST /api/large/sales/orders/lines` | `<role>::large.sales.orders.lines::all` | `create` |

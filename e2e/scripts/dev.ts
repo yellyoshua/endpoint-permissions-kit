@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 const E2E_ROOT = resolve(import.meta.dir, '..');
 
-const api = Bun.spawn(['bun', 'run', 'src/server/index.ts'], { cwd: E2E_ROOT, stdout: 'inherit', stderr: 'inherit' });
+const api = Bun.spawn(['bun', '--watch', 'src/server/index.ts'], { cwd: E2E_ROOT, stdout: 'inherit', stderr: 'inherit' });
 const vite = Bun.spawn(['bunx', 'vite'], { cwd: E2E_ROOT, stdout: 'inherit', stderr: 'inherit' });
 
 function stopBoth(): void {

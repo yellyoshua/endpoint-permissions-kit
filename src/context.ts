@@ -16,4 +16,4 @@ function getRoles(key: 'roles'): readonly string[] {
   return [...getOrCreateState().roles];
 }
 
-export const context = { set: setRoles, get: getRoles };
+export const context = Object.freeze({ set: setRoles, get: getRoles });

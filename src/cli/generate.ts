@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
-import { CATALOG_MARKER, EXIT_CODE } from './protocol';
+import { CATALOG_MARKER, CHILD_MAX_BUFFER_BYTES, CHILD_TIMEOUT_MS, EXIT_CODE } from './protocol';
 import { validateStrings } from '../Validators';
 
 interface GenerateOptions {
@@ -41,7 +41,12 @@ async function readRoleCatalog(configPath: string, workingDirectory: string): Pr
   const childPath = resolve(dirname(generatorPath), generatorPath.endsWith('.ts') ? 'child.ts' : 'child.js');
   const childArguments = [childPath, configPath];
   if (extname(configPath) === '.ts' && !process.versions.bun) childArguments.unshift('--experimental-strip-types');
-  const { stdout } = await promisify(execFile)(process.execPath, childArguments, { cwd: workingDirectory });
+  const { stdout } = await promisify(execFile)(process.execPath, childArguments, {
+    cwd: workingDirectory,
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    maxBuffer: CHILD_MAX_BUFFER_BYTES,
+  });
   for (const outputLine of stdout.split('\n')) {
     if (!outputLine.startsWith(CATALOG_MARKER)) continue;
     const catalog: { roles: unknown } = JSON.parse(outputLine.slice(CATALOG_MARKER.length));

@@ -27,7 +27,7 @@ bun run test
 bun run dev
 ```
 
-`bun run dev` starts the API on http://localhost:3001 and the client on http://localhost:5173. Open `/` and pick a project; the header has a "Simulated user" selector. The selected id is sent as the `x-user-id` header; "anonymous" sends no header (available only in small and extra-large). Navigation and buttons come from `GET /api/<project>/me`.
+`bun run dev` starts the API on http://localhost:3001 (restarted automatically by `bun --watch` when a server or `permissions.ts` file changes) and the client on http://localhost:5173 (Vite HMR). Open `/` and pick a project; the header has a "Simulated user" selector. The selected id is sent as the `x-user-id` header; "anonymous" sends no header (available only in small and extra-large). Navigation and buttons come from `GET /api/<project>/me`.
 
 ## Where things are
 

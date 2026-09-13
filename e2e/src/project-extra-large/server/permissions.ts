@@ -1,5 +1,7 @@
 import pkit from 'endpoint-permissions-kit';
 import type { Context, Data, ResolvedPermission } from 'endpoint-permissions-kit';
+import { resourceIdOf, sessionUserIdOf } from '../../server/requestContext';
+import { contactNotes, entries as ledgerEntries, members as tenantMembers, reports as analyticsReports, tickets, type StoredRecord } from './store';
 
 export const MODULE_PREFIX = 'xl';
 
@@ -26,6 +28,9 @@ export const PINNED_REPORT_MESSAGE = 'Pinned reports cannot be removed';
 export const OWNER_MEMBER_MESSAGE = 'Owner members cannot be removed by an admin';
 export const NON_POSITIVE_AMOUNT_MESSAGE = 'Entry amount must be positive';
 export const GRANTED_INTERNAL_REPLIES_MESSAGE = 'Granted reply access excludes the internal scope';
+export const BLANK_TENANT_NAME_MESSAGE = 'Tenant name cannot be blank';
+export const BLOCK_KIND_REQUIRED_MESSAGE = 'Block kind is required';
+export const NOTE_BODY_REQUIRED_MESSAGE = 'Note body is required';
 
 export const ENTRY_REMOVAL_THRESHOLD = 10000;
 
@@ -265,37 +270,39 @@ function requireTenantContext(_data: Data | undefined, context: Context | undefi
   if (context === undefined) throw new Error(MISSING_TENANT_CONTEXT_MESSAGE);
 }
 
-async function rejectClosedTicketReply(_data: Data | undefined, context: Context | undefined): Promise<void> {
-  const ticket = context?.ticket as { status?: string } | undefined;
+function targetRecord(context: Context | undefined, find: (id: string) => StoredRecord | undefined): StoredRecord | undefined {
+  const id = resourceIdOf(context);
+  return id === undefined ? undefined : find(id);
+}
+
+async function rejectClosedTicketReply(data: Data | undefined): Promise<void> {
+  const ticket = tickets.find(String(data?.ticketId ?? ''));
   await Promise.resolve();
   if (ticket?.status === 'closed') throw new Error(CLOSED_TICKET_MESSAGE);
 }
 
 function rejectReconciledEntryRemoval(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as { reconciled?: boolean } | undefined;
-  if (resource?.reconciled === true) throw new Error(RECONCILED_ENTRY_MESSAGE);
+  if (targetRecord(context, ledgerEntries.find)?.reconciled === true) throw new Error(RECONCILED_ENTRY_MESSAGE);
 }
 
 function rejectLargeEntryRemoval(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as { amount?: number } | undefined;
-  if (typeof resource?.amount === 'number' && resource.amount > ENTRY_REMOVAL_THRESHOLD) throw new Error(LARGE_ENTRY_MESSAGE);
+  const amount = targetRecord(context, ledgerEntries.find)?.amount;
+  if (typeof amount === 'number' && amount > ENTRY_REMOVAL_THRESHOLD) throw new Error(LARGE_ENTRY_MESSAGE);
 }
 
 function requireNoteAuthor(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as { author?: string } | undefined;
-  const user = context?.user as { id?: string } | undefined;
-  if (resource?.author !== user?.id) throw new Error(NOTE_AUTHOR_MESSAGE);
+  const note = targetRecord(context, contactNotes.find);
+  if (note !== undefined && note.author !== sessionUserIdOf(context)) throw new Error(NOTE_AUTHOR_MESSAGE);
 }
 
 async function rejectPinnedReportRemoval(_data: Data | undefined, context: Context | undefined): Promise<void> {
-  const resource = context?.resource as { pinned?: boolean } | undefined;
+  const report = targetRecord(context, analyticsReports.find);
   await Promise.resolve();
-  if (resource?.pinned === true) throw new Error(PINNED_REPORT_MESSAGE);
+  if (report?.pinned === true) throw new Error(PINNED_REPORT_MESSAGE);
 }
 
 function rejectOwnerMemberRemoval(_data: Data | undefined, context: Context | undefined): void {
-  const resource = context?.resource as { role?: string } | undefined;
-  if (resource?.role === 'owner') throw new Error(OWNER_MEMBER_MESSAGE);
+  if (targetRecord(context, tenantMembers.find)?.role === 'owner') throw new Error(OWNER_MEMBER_MESSAGE);
 }
 
 async function requirePositiveAmount(data: Data | undefined): Promise<void> {
@@ -308,6 +315,23 @@ function rejectGrantedInternalScope(_data: Data | undefined, context: Context | 
   if (context?.isInternalScope === true) throw new Error(GRANTED_INTERNAL_REPLIES_MESSAGE);
 }
 
+function rejectBlankTenantName(data: Data | undefined): void {
+  if (data !== undefined && 'name' in data && (typeof data.name !== 'string' || data.name.trim() === '')) {
+    throw new Error(BLANK_TENANT_NAME_MESSAGE);
+  }
+}
+
+function requireBlockKind(data: Data | undefined): void {
+  if (typeof data?.kind !== 'string' || data.kind.trim() === '') throw new Error(BLOCK_KIND_REQUIRED_MESSAGE);
+}
+
+function requireNoteBody(data: Data | undefined): void {
+  if (typeof data?.body !== 'string' || data.body.trim() === '') throw new Error(NOTE_BODY_REQUIRED_MESSAGE);
+}
+
+settings.hook('update', rejectBlankTenantName);
+blocks.hook('create', requireBlockKind);
+notesAll.hook('create', requireNoteBody);
 members.hook('create', requireTenantContext);
 replies.hook('create', rejectClosedTicketReply);
 entries.hook('remove', rejectReconciledEntryRemoval);
