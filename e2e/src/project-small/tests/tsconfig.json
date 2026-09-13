@@ -1,0 +1,5 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["types.fixture.ts", "../../../pkit.generated.d.ts"]
+}
