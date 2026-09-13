@@ -19,17 +19,26 @@ export function validate<RequestData extends Data>(input: WriteInput<RequestData
 export async function validate(input: ValidateInput): Promise<ValidateResult<FindResult | Data>> {
   try {
     const request = validateRequest(input, getOrCreateState());
-    const { registeredModule, permission, result } = request;
+    const { registeredModule, nameEntry, permission, result } = request;
+    const { method, role } = permission;
+
+    const hookGroups = [
+      registeredModule.hooks.get(method),
+      nameEntry.hooks.get(GLOBAL_HOOK_OWNER)?.get(method),
+      nameEntry.hooks.get(role)?.get(method),
+    ];
+
     const hookCalls: Promise<unknown>[] = [];
-    for (const hookRole of [GLOBAL_HOOK_OWNER, permission.role]) {
-      const hooks = registeredModule.hooks.get(hookRole)?.get(permission.method);
+    for (const hooks of hookGroups) {
       if (!hooks) continue;
       for (const hook of hooks) hookCalls.push(invokeHook(hook, request));
     }
+
     const hookResults = await Promise.allSettled(hookCalls);
     const errors: ValidationError[] = [];
     for (const hookResult of hookResults) {
       if (hookResult.status === 'fulfilled') continue;
+
       const hookCause: unknown = hookResult.reason;
       errors.push({
         code: 'HOOK_ERROR',
@@ -37,7 +46,9 @@ export async function validate(input: ValidateInput): Promise<ValidateResult<Fin
         cause: hookCause,
       });
     }
+
     if (errors.length) return { result: null, errors: Object.freeze(errors) };
+
     return { result, errors: Object.freeze([] as const) };
   } catch (cause) {
     if (cause instanceof Error && cause.name === 'PkitError') {
@@ -45,8 +56,10 @@ export async function validate(input: ValidateInput): Promise<ValidateResult<Fin
       const error: ValidationError = permissionError.code === 'PROPERTIES_NOT_ALLOWED'
         ? { code: permissionError.code, message: permissionError.message, fields: permissionError.fields }
         : { code: permissionError.code, message: permissionError.message };
+
       return { result: null, errors: Object.freeze([error]) };
     }
+
     return {
       result: null,
       errors: Object.freeze([{ code: 'VALIDATION_ERROR', message: 'no se pudo validar el permiso', cause }]),

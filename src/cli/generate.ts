@@ -26,48 +26,51 @@ interface CheckResult extends GenerateResult {
   isStale: boolean;
 }
 
-async function loadRoleDeclaration(options: GenerateOptions): Promise<RoleDeclaration> {
-  const { cwd: workingDirectory, config, out } = options;
+function resolveConfigPath(workingDirectory: string, config: string | undefined): string {
+  if (config !== undefined) return resolve(workingDirectory, config);
   const configFilenames = ['pkit.config.js', 'pkit.config.mjs', 'pkit.config.cjs', 'pkit.config.ts'];
-  let configPath: string | undefined;
-  if (config !== undefined) configPath = resolve(workingDirectory, config);
-  if (config === undefined) {
-    for (const filename of configFilenames) {
-      const candidatePath = resolve(workingDirectory, filename);
-      if (!existsSync(candidatePath)) continue;
-      configPath = candidatePath;
-      break;
-    }
+  for (const filename of configFilenames) {
+    const candidatePath = resolve(workingDirectory, filename);
+    if (existsSync(candidatePath)) return candidatePath;
   }
-  if (configPath === undefined) {
-    throw new Error(`no se encontró ${configFilenames.join(' | ')} en ${workingDirectory}`);
-  }
+  throw new Error(`no se encontró ${configFilenames.join(' | ')} en ${workingDirectory}`);
+}
+
+async function readRoleCatalog(configPath: string, workingDirectory: string): Promise<readonly string[]> {
   const generatorPath = fileURLToPath(import.meta.url);
   const childPath = resolve(dirname(generatorPath), generatorPath.endsWith('.ts') ? 'child.ts' : 'child.js');
   const childArguments = [childPath, configPath];
   if (extname(configPath) === '.ts' && !process.versions.bun) childArguments.unshift('--experimental-strip-types');
   const { stdout } = await promisify(execFile)(process.execPath, childArguments, { cwd: workingDirectory });
-  let catalogLine: string | undefined;
   for (const outputLine of stdout.split('\n')) {
     if (!outputLine.startsWith(CATALOG_MARKER)) continue;
-    catalogLine = outputLine;
-    break;
+    const catalog: { roles: unknown } = JSON.parse(outputLine.slice(CATALOG_MARKER.length));
+    validateStrings(catalog.roles, {
+      code: 'INVALID_DEFINITION', message: 'el proceso hijo devolvió un catálogo de roles inválido', minimumLength: 1,
+    });
+    return catalog.roles;
   }
-  if (catalogLine === undefined) throw new Error('el proceso hijo no devolvió el catálogo de roles');
-  const catalog: { roles: unknown } = JSON.parse(catalogLine.slice(CATALOG_MARKER.length));
-  validateStrings(catalog.roles, {
-    code: 'INVALID_DEFINITION', message: 'el proceso hijo devolvió un catálogo de roles inválido', minimumLength: 1,
-  });
+  throw new Error('el proceso hijo no devolvió el catálogo de roles');
+}
+
+function renderRoleDeclarations(roles: readonly string[]): string {
   const declarations = [
     "import 'endpoint-permissions-kit/types';",
     '',
     "declare module 'endpoint-permissions-kit/types' {",
     '  interface RoleRegistry {',
   ];
-  for (const role of [...catalog.roles].sort()) declarations.push(`    ${JSON.stringify(role)}: true;`);
+  for (const role of [...roles].sort()) declarations.push(`    ${JSON.stringify(role)}: true;`);
   declarations.push('  }', '}', '');
+  return declarations.join('\n');
+}
+
+async function loadRoleDeclaration(options: GenerateOptions): Promise<RoleDeclaration> {
+  const { cwd: workingDirectory, config, out } = options;
+  const configPath = resolveConfigPath(workingDirectory, config);
+  const roles = await readRoleCatalog(configPath, workingDirectory);
   const outPath = out === undefined ? resolve(workingDirectory, 'pkit.generated.d.ts') : resolve(workingDirectory, out);
-  return { configPath, outPath, roles: catalog.roles, content: declarations.join('\n') };
+  return { configPath, outPath, roles, content: renderRoleDeclarations(roles) };
 }
 
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {

@@ -7,20 +7,26 @@ import { validate } from './validate';
 export type {
   ActionDef,
   ActionDefs,
+  Authorization,
   Context,
   Data,
   FindInput,
   FindResult,
+  GrantDef,
+  GrantDefs,
   HookFn,
   Method,
-  PermissionCatalog,
+  MethodAccessMap,
+  NamedPermissionCatalog,
   PermissionEntry,
+  PermissionId,
   PkitErrorCode,
   Properties,
   ResolvedPermission,
   Role,
-  RolePermissionMap,
   RoleRegistry,
+  UserAssignments,
+  UserPermissionMap,
   ValidateInput,
   ValidateResult,
   ValidationError,
@@ -29,7 +35,7 @@ export type {
 } from './types';
 export { METHODS } from './constants';
 export type { PkitError } from './errors';
-export type { ModuleBuilder, RoleBuilder } from './registry';
+export type { GrantBuilder, ModuleBuilder, NameBuilder, RoleBuilder } from './registry';
 export { context, seal, permissions, validate, defineModule as module };
 
 export const pkit = Object.freeze({ context, module: defineModule, seal, permissions, validate });

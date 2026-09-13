@@ -69,7 +69,7 @@ endpoint-permissions-kit/
 | `src/permissions.ts` | Expone el catálogo y el mapa plano por rol; exige sellado y rechaza roles desconocidos |
 | `src/Validators.ts` | Validaciones explícitas y reutilizables de objetos, strings, catálogo, roles, definiciones, hooks y peticiones; nunca consulta estado global ni formatea respuestas |
 | `src/validate.ts` | Invoca la validación de petición y ejecuta hooks; único propietario del formato `{ result, errors }` |
-| `src/cli/generate.ts` | Carga configuración, ejecuta el hijo, construye declaraciones, escribe o comprueba el archivo y gestiona la salida del CLI |
+| `src/cli/generate.ts` | Pasos nombrados para resolver el config, leer el catálogo del hijo y renderizar declaraciones; `loadRoleDeclaration` los orquesta y `main` gestiona la salida del CLI |
 | `src/cli/child.ts` | Importa el config y emite el catálogo marcado en stdout |
 | `src/cli/protocol.ts` | Constantes compartidas del protocolo padre/hijo y códigos de salida |
 | `bin/pkit.mjs` | Entrada ejecutable Node que llama al CLI compilado |
@@ -141,6 +141,7 @@ Todo fallo produce `result: null`. El éxito produce una selección efectiva par
 - Escritura exige que las claves de `data` sean un subconjunto de `properties`; el comodín elimina únicamente esa restricción de campos.
 - `data` es obligatoria en escritura y opcional en find; `context` es opcional. Los valores opcionales ausentes se conservan como undefined al invocar hooks. No se fabrican objetos vacíos. `null`, arrays y primitivas se rechazan.
 - Los hooks globales aplican a todos los roles. Los hooks de `general` aplican exclusivamente a `general`, incluso cuando otros roles heredan sus métodos.
+- `*` identifica al propietario de los hooks globales y está reservado: `context.set` rechaza un catálogo que lo declare como rol.
 - Todos los hooks aplicables se esperan con `Promise.allSettled`. El orden de errores sigue el registro: globales primero, luego los del rol. No transforman resultados.
 
 ## Tipos, CLI y distribución
@@ -205,19 +206,19 @@ No se midió rendimiento ni se verificó carga de producción. La librería no a
 
 ## Funciones y argumentos de Validators
 
-Todos estos métodos se exportan desde `src/Validators.ts` para reutilización interna; no se añaden al entrypoint público del paquete. Reciben argumentos explícitos y no leen globalThis.
+Los métodos con consumidores fuera del archivo se exportan desde `src/Validators.ts` para reutilización interna; no se añaden al entrypoint público del paquete. `validateObject`, `validateOpenRegistry` y `validateMethod` sólo tienen consumidores dentro de `Validators.ts` y permanecen privados, según la convención de exports con consumidores reales. Todos reciben argumentos explícitos y no leen globalThis.
 
 | Método | Argumentos y resultado |
 | --- | --- |
-| `validateObject` | Valor desconocido y `{ code, message }`; afirma un objeto de datos |
+| `validateObject` (privado) | Valor desconocido y `{ code, message }`; afirma un objeto de datos |
 | `validateStrings` | Valor desconocido y `{ code, message, minimumLength }`; afirma una lista de strings |
 | `validateContextKey` | Clave desconocida; exige roles |
-| `validateOpenRegistry` | Estado explícito; exige registro abierto |
+| `validateOpenRegistry` (privado) | Estado explícito; exige registro abierto |
 | `validateSnapshot` | Snapshot genérico o null; exige snapshot materializado |
 | `validateRole` | Rol desconocido, catálogo ReadonlySet y código de la operación |
-| `validateRoleCatalog` | Lista desconocida y estado; combina registro abierto, orden de configuración y strings no vacíos |
+| `validateRoleCatalog` | Lista desconocida y estado; combina registro abierto, orden de configuración, strings no vacíos y el rechazo del marcador de hooks globales |
 | `validateModuleName` | Nombre desconocido; string no vacío y sin puntos |
-| `validateMethod` | Método desconocido y acción para identificar el error |
+| `validateMethod` (privado) | Método desconocido y acción para identificar el error |
 | `validateActions` | Acciones desconocidas, `{ action, role }` y estado; comprueba registro/rol/duplicado y devuelve una copia congelada |
 | `validateHook` | Hook desconocido, `{ action, role, method }` y estado; comprueba registro, rol, método y función |
 | `validateRegisteredHooks` | ReadonlyMap de módulos; comprueba hooks de rol huérfanos |

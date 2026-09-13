@@ -29,7 +29,7 @@ function removeConsumers() {
 
 async function renderSortedRoles() {
   const consumerDirectory = createConsumer(`
-  pkit.context.set('roles', ['staff', 'portal-manager']);
+  pkit.context.set('roles', ['staff', 'content-manager']);
   `, 'pkit.config.mjs');
   const generationResult = await generate({ cwd: consumerDirectory });
   expect(readFileSync(generationResult.outPath, 'utf8')).toBe([
@@ -37,8 +37,7 @@ async function renderSortedRoles() {
     '',
     "declare module 'endpoint-permissions-kit/types' {",
     '  interface RoleRegistry {',
-    '    "general": true;',
-    '    "portal-manager": true;',
+    '    "content-manager": true;',
     '    "staff": true;',
     '  }',
     '}',
@@ -52,7 +51,7 @@ async function generateInChildProcess() {
   pkit.context.set('roles', ['admin', 'staff']);
   `, 'pkit.config.mjs');
   const generationResult = await generate({ cwd: consumerDirectory });
-  expect(generationResult.roles).toEqual(['general', 'admin', 'staff']);
+  expect(generationResult.roles).toEqual(['admin', 'staff']);
   expect(readFileSync(generationResult.outPath, 'utf8')).toContain('"admin": true;');
   expect(await checkGenerated({ cwd: consumerDirectory })).toMatchObject({ isStale: false });
 }

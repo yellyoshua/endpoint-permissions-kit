@@ -1,30 +1,22 @@
-import type { PermissionCatalog, PermissionEntry, RolePermissionMap } from './types';
-import { METHODS } from './constants';
+import type { Method, NamedPermissionCatalog, PermissionEntry } from './types';
 import { getOrCreateState } from './state';
-import { resolveAction } from './resolve';
-import { validateRegisteredHooks } from './Validators';
+import { permissionIdOf } from './resolve';
+import { validateSealedRegistry } from './Validators';
 
 export function seal(): void {
   const state = getOrCreateState();
   if (state.snapshot) return;
 
-  validateRegisteredHooks(state.modules);
+  validateSealedRegistry(state.modules);
 
-  const permissionsByRole: Record<string, Readonly<Record<string, PermissionEntry>>> = Object.create(null);
-  const accessByRole = new Map<string, RolePermissionMap>();
-  for (const role of state.roles) {
-    const rolePermissions: Record<string, PermissionEntry> = Object.create(null);
-    const roleAccess: Record<string, boolean> = Object.create(null);
-    for (const [action, registeredModule] of state.modules) {
-      for (const method of METHODS) {
-        const permissionDefinition = resolveAction(registeredModule, role, method);
-        const permissionPath = `${action}.${method}`;
-        roleAccess[permissionPath] = permissionDefinition?.enabled === true;
-        if (permissionDefinition) rolePermissions[permissionPath] = permissionDefinition;
+  const named: Record<string, Readonly<Partial<Record<Method, PermissionEntry>>>> = Object.create(null);
+  for (const [action, registeredModule] of state.modules) {
+    for (const [name, nameEntry] of registeredModule.names) {
+      for (const [role, actions] of nameEntry.actions) {
+        named[permissionIdOf(role, action, name)] = actions;
       }
     }
-    permissionsByRole[role] = Object.freeze(rolePermissions);
-    accessByRole.set(role, Object.freeze(roleAccess));
   }
-  state.snapshot = { all: Object.freeze(permissionsByRole) as PermissionCatalog, byRole: accessByRole };
+
+  state.snapshot = { named: Object.freeze(named) as NamedPermissionCatalog, assignable: new Set(Object.keys(named)) };
 }
