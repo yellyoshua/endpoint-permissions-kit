@@ -2,7 +2,7 @@ import type { Context, Data, FindInput, FindResult, HookFn, ResolvedPermission, 
 import { GLOBAL_HOOK_OWNER } from './constants';
 import { getOrCreateState } from './state';
 import type { PkitError } from './errors';
-import { validateRequest } from './Validators';
+import { validateRequest } from './validators';
 
 interface HookCall {
   data: Data | undefined;
@@ -18,7 +18,7 @@ function describeHookFailure(reason: unknown): string {
   try {
     return reason instanceof Error ? reason.message : String(reason);
   } catch {
-    return 'el hook lanzó un valor que no se puede describir';
+    return 'the hook threw a value that cannot be described';
   }
 }
 
@@ -37,6 +37,7 @@ export async function validate(input: ValidateInput): Promise<ValidateResult<Fin
     ];
 
     const hookCalls: Promise<unknown>[] = [];
+
     for (const hooks of hookGroups) {
       if (!hooks) continue;
       for (const hook of hooks) hookCalls.push(invokeHook(hook, request));
@@ -44,6 +45,7 @@ export async function validate(input: ValidateInput): Promise<ValidateResult<Fin
 
     const hookResults = await Promise.allSettled(hookCalls);
     const errors: ValidationError[] = [];
+
     for (const hookResult of hookResults) {
       if (hookResult.status === 'fulfilled') continue;
 
@@ -66,7 +68,7 @@ export async function validate(input: ValidateInput): Promise<ValidateResult<Fin
 
     return {
       result: null,
-      errors: Object.freeze([{ code: 'VALIDATION_ERROR', message: 'no se pudo validar el permiso', cause }]),
+      errors: Object.freeze([{ code: 'VALIDATION_ERROR', message: 'permission could not be validated', cause }]),
     };
   }
 }

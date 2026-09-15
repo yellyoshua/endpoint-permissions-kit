@@ -12,6 +12,7 @@ const ITEM_SUMMARY = { find: { enabled: true, properties: ['id', 'name', 'assetI
 
 export function resetState(): void {
   const state = getOrCreateState();
+
   state.roles = new Set([GENERAL_ROLE]);
   state.modules.clear();
   state.snapshot = null;

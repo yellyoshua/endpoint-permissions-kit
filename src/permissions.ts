@@ -2,10 +2,11 @@ import type { MethodAccessMap, NamedPermissionCatalog, UserAssignments, UserPerm
 import { METHODS } from './constants';
 import { permissionIdOf, resolveAccess } from './resolve';
 import { getOrCreateState, type NameEntry } from './state';
-import { validateIdentity, validateSnapshot } from './Validators';
+import { validateIdentity, validateSnapshot } from './validators';
 
 function getNamedCatalog(): NamedPermissionCatalog {
   const { snapshot } = getOrCreateState();
+
   validateSnapshot(snapshot);
 
   return snapshot.named;
@@ -17,6 +18,7 @@ function resolveMethodAccess(nameEntry: NameEntry, permissionId: string, role: s
 
   for (const method of METHODS) {
     const access = resolveAccess(nameEntry, permissionId, role, method, assigned);
+
     methodAccess[method] = access.status === 'granted';
     if (access.status !== 'unassigned') reachable = true;
   }
@@ -29,10 +31,12 @@ function forUser(assignments: UserAssignments): UserPermissionMap {
   const { role, assigned } = validateIdentity(assignments, state);
 
   const access: Record<string, MethodAccessMap> = Object.create(null);
+
   for (const [action, registeredModule] of state.modules) {
     for (const [name, nameEntry] of registeredModule.names) {
       const permissionId = permissionIdOf(role, action, name);
       const methodAccess = resolveMethodAccess(nameEntry, permissionId, role, assigned);
+
       if (methodAccess) access[permissionId] = methodAccess;
     }
   }

@@ -1,7 +1,7 @@
 import type { ActionDefs, GrantDefs, HookFn, Method, PermissionId, Role } from './types';
 import { GLOBAL_HOOK_OWNER, MODULE_SEPARATOR } from './constants';
 import { getOrCreateState, type ModuleEntry, type NameEntry, type State } from './state';
-import { validateActions, validateGrantActions, validateHook, validateModuleName, validatePermissionName, validateRoleSegment } from './Validators';
+import { validateActions, validateGrantActions, validateHook, validateModuleName, validatePermissionName, validateRoleSegment } from './validators';
 
 export interface ModuleBuilder {
   module(segment: string): ModuleBuilder;
@@ -45,6 +45,7 @@ interface GrantScope {
 
 function appendHook(methodHooks: Map<Method, HookFn[]>, method: Method, hook: HookFn): void {
   const hooks = methodHooks.get(method) ?? [];
+
   methodHooks.set(method, hooks);
   hooks.push(hook);
 }
@@ -69,6 +70,7 @@ function registerGrant(scope: GrantScope, actions: GrantDefs): GrantBuilder {
 
 function registerModuleHook(scope: ModuleScope, method: Method, hook: HookFn): ModuleBuilder {
   const state = getOrCreateState();
+
   validateHook(hook, { action: scope.action, method }, state);
 
   appendHook(ensureModule(state, scope.action).hooks, method, hook);
@@ -78,10 +80,12 @@ function registerModuleHook(scope: ModuleScope, method: Method, hook: HookFn): M
 
 function registerNameHook<Builder>(scope: NameScope<Builder>, method: Method, hook: HookFn): Builder {
   const state = getOrCreateState();
+
   validateHook(hook, { ...scope, method }, state);
 
   const nameEntry = ensureName(state, scope.action, scope.name);
   const roleHooks = nameEntry.hooks.get(scope.role) ?? new Map<Method, HookFn[]>();
+
   nameEntry.hooks.set(scope.role, roleHooks);
 
   appendHook(roleHooks, method, hook);
@@ -146,9 +150,11 @@ export function defineModule(segment: string): ModuleBuilder {
 
 function ensureModule(state: State, action: string): ModuleEntry {
   const registeredModule = state.modules.get(action);
+
   if (registeredModule) return registeredModule;
 
   const newModule: ModuleEntry = { names: new Map(), hooks: new Map() };
+
   state.modules.set(action, newModule);
 
   return newModule;
@@ -157,9 +163,11 @@ function ensureModule(state: State, action: string): ModuleEntry {
 function ensureName(state: State, action: string, name: string): NameEntry {
   const registeredModule = ensureModule(state, action);
   const registeredName = registeredModule.names.get(name);
+
   if (registeredName) return registeredName;
 
   const newName: NameEntry = { actions: new Map(), grants: new Map(), hooks: new Map() };
+
   registeredModule.names.set(name, newName);
 
   return newName;
