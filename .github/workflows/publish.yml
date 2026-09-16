@@ -18,4 +18,4 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
-      - run: npm stage publish --tag "release-$(npm pkg get version | tr -d '"')"
+      - run: npm stage publish --tag "latest"
