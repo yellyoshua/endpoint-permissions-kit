@@ -15,8 +15,10 @@ export function resetState(): void {
 
   currentState.roles = new Set([constants.GENERAL_ROLE]);
   currentState.cropper = false;
-  currentState.modules.clear();
+  currentState.reservedFields = [];
   currentState.snapshot = null;
+
+  currentState.modules.clear();
 }
 
 export function setupInventory() {

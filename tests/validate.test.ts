@@ -422,6 +422,58 @@ describe('validate', () => {
     });
   });
 
+  describe('reservedFields', () => {
+    test('allows reserved paths without denying them', async () => {
+      setupNested(['name'], false, ['id', 'meta.version']);
+
+      const allowedData = { id: 1, name: 'x', meta: { version: 2 } };
+
+      const forbiddenData = { id: 1, meta: { version: 2, owner: 3 }, user: { id: 4 } };
+
+      expect((await validateNested(allowedData)).result?.data).toBe(allowedData);
+
+      expect(errorFields(await validateNested(forbiddenData))).toEqual(['meta.owner', 'user.id']);
+    });
+
+    test('keeps reserved paths when cropping', async () => {
+      setupNested(['name'], true, ['id', 'items.id']);
+
+      const data = { id: 1, name: 'x', owner: 2, items: [{ id: 3, secret: 4 }] };
+
+      const validation = await validateNested(data);
+
+      expect(validation).toEqual({ result: { data: { id: 1, name: 'x', items: [{ id: 3 }] } }, errors: [] });
+    });
+
+    test('defaults to empty, replaces on set and is frozen by seal()', () => {
+      setupInventory();
+
+      expect(pkit.context.get('reservedFields')).toEqual([]);
+
+      pkit.context.set('reservedFields', ['id']);
+      pkit.context.set('reservedFields', ['name', 'name']);
+
+      expect(pkit.context.get('reservedFields')).toEqual(['name', 'name']);
+
+      pkit.seal();
+
+      expect(pkit.context.set.bind(null, 'reservedFields', [])).toThrow(/pkit.seal\(\) was already called/);
+    });
+
+    test('rejects invalid paths at set', () => {
+      resetState();
+
+      expect(pkit.context.set.bind(null, 'reservedFields', 'id' as never)).toThrow(/reservedFields must be an array of property paths/);
+      expect(pkit.context.set.bind(null, 'reservedFields', [1] as never)).toThrow(/reservedFields must be an array of property paths/);
+      expect(pkit.context.set.bind(null, 'reservedFields', ['*'])).toThrow(/cannot start with "\*"/);
+      expect(pkit.context.set.bind(null, 'reservedFields', ['*.id'])).toThrow(/cannot start with "\*"/);
+      expect(pkit.context.set.bind(null, 'reservedFields', ['items[0].id'])).toThrow(/array indexes are not allowed/);
+      expect(pkit.context.set.bind(null, 'reservedFields', ['meta..id'])).toThrow(/empty segment/);
+      expect(pkit.context.set.bind(null, 'reservedFields', [''])).toThrow(/empty segment/);
+      expect(pkit.context.get('reservedFields')).toEqual([]);
+    });
+  });
+
   describe('nested properties', () => {
     test('matches literal paths and denies anything else under them', async () => {
       setupNested(['unicorn.name']);
@@ -530,11 +582,17 @@ describe('validate', () => {
   });
 });
 
-function setupNested(properties: readonly string[], cropper?: boolean): void {
+function setupNested(properties: readonly string[], cropper?: boolean, reservedFields?: readonly string[]): void {
   resetState();
+
   pkit.context.set('roles', ['staff']);
+
   if (cropper === true) pkit.context.set('cropper', true);
+
   pkit.module('catalog').name('all').role('staff').registerActions({ update: { enabled: true, properties } });
+
+  if (reservedFields) pkit.context.set('reservedFields', reservedFields);
+
   pkit.seal();
 }
 

@@ -2,24 +2,12 @@ import constants from './constants';
 import errors from './errors';
 import type { Data, Properties } from './types';
 
-/** Marks a node the crop removed, so its parent drops the key instead of keeping an empty container. */
 const PRUNED = Symbol('pruned');
 
-/**
- * Hard ceiling on how deep `data` may nest. Request payloads are orders of
- * magnitude shallower; the limit keeps a hostile payload from driving the walk
- * into the call stack, and it is checked instead of relying on stack size.
- */
 const MAX_DEPTH = 1000;
 
-/** A declared property path, split into segments once so matching never re-parses it. */
 type PathPattern = readonly string[];
 
-/**
- * State carried through one walk of `data`.
- * `segments` is the path of the node being visited, and `ancestors` holds the
- * containers currently open above it, which is how a cycle is detected.
- */
 interface Walk {
   readonly patterns: readonly PathPattern[];
   readonly segments: string[];
@@ -27,12 +15,6 @@ interface Walk {
 }
 
 const properties = {
-  /**
-   * Checks one path declared in `registerActions`.
-   * Array indexes never appear in the paths of `data` (elements share their
-   * container's path), and a leading wildcard would grant that leaf under every
-   * root key.
-   */
   checkDeclaredPath(property: string, permissionPath: string): void {
     if (property.includes('[') || property.includes(']')) {
       throw errors.create('INVALID_DEFINITION', `${permissionPath}: array indexes are not allowed in properties: "${property}"`);
@@ -49,17 +31,12 @@ const properties = {
     }
   },
 
-  /**
-   * Compares the paths of `data` with the fields the permission allows.
-   * Denies the request with `PROPERTIES_NOT_ALLOWED`, or returns a cropped copy
-   * when the `cropper` option is on. `data` is never mutated.
-   */
-  resolve(data: Data, allowed: Properties, cropper: boolean): Data {
+  resolve(data: Data, allowed: Properties, reserved: readonly string[], cropper: boolean): Data {
     if (allowed === constants.ALL_FIELDS) return data;
 
     const patterns: PathPattern[] = [];
 
-    for (const pattern of allowed) patterns.push(segmentsOf(pattern));
+    for (const pattern of allowed.concat(reserved)) patterns.push(segmentsOf(pattern));
 
     const walk: Walk = { patterns, segments: [], ancestors: new Set([data]) };
 
@@ -71,16 +48,11 @@ const properties = {
   },
 };
 
-/**
- * Splits a declared property path into segments; `\` escapes the next character.
- * Only declared paths reach this: `checkDeclaredPath` has already rejected the
- * bracket syntax, and the paths of `data` are walked structurally, never rendered
- * into a string first.
- */
 function segmentsOf(path: string): readonly string[] {
   const segments: string[] = [];
 
   let segment = '';
+
   let index = 0;
 
   while (index < path.length) {
@@ -89,13 +61,16 @@ function segmentsOf(path: string): readonly string[] {
     if (character === '\\') {
       segment += path[index + 1] ?? '';
       index += 2;
+
       continue;
     }
 
     if (character === '.') {
       segments.push(segment);
+
       segment = '';
       index += 1;
+
       continue;
     }
 
@@ -108,7 +83,6 @@ function segmentsOf(path: string): readonly string[] {
   return segments;
 }
 
-/** A pattern matches a path when both have the same depth and every segment is equal or `*`. */
 function isAllowedPath(segments: readonly string[], patterns: readonly PathPattern[]): boolean {
   for (const pattern of patterns) {
     if (pattern.length !== segments.length) continue;
@@ -122,6 +96,7 @@ function isAllowedPath(segments: readonly string[], patterns: readonly PathPatte
       if (patternSegment === segments[index]) continue;
 
       isMatch = false;
+
       break;
     }
 
@@ -131,7 +106,6 @@ function isAllowedPath(segments: readonly string[], patterns: readonly PathPatte
   return false;
 }
 
-/** Only plain objects and arrays are walked; everything else is one leaf, kept or dropped whole. */
 function isPlainObject(value: unknown): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
 
@@ -146,11 +120,6 @@ function requireDepth(walk: Walk): void {
   throw new RangeError(`data is nested deeper than ${MAX_DEPTH} levels`);
 }
 
-/**
- * Writes one cropped field.
- * A plain assignment to `__proto__` would hit the inherited setter and either
- * change the prototype or silently lose the field, so that one key is defined.
- */
 function setField(target: Data, key: string, value: unknown): void {
   if (key === '__proto__') {
     Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
@@ -161,16 +130,6 @@ function setField(target: Data, key: string, value: unknown): void {
   target[key] = value;
 }
 
-/**
- * Walks `data` alongside the path being built and returns the allowed part of it,
- * or `PRUNED` when nothing of this node survives.
- *
- * Array elements share their container's path, which is what drops indexes at
- * every depth. An empty container is itself a leaf, so a permission that declares
- * it keeps it; a container the crop emptied is dropped, and that cascades to its
- * parent. A cycle cannot be represented in a filtered copy, so it is refused
- * rather than copied by reference, which would hand the hooks uncropped data.
- */
 function cropValue(value: unknown, walk: Walk): unknown {
   if (Array.isArray(value)) {
     if (value.length === 0) return isAllowedPath(walk.segments, walk.patterns) ? [] : PRUNED;
@@ -178,6 +137,7 @@ function cropValue(value: unknown, walk: Walk): unknown {
     if (walk.ancestors.has(value)) throw new RangeError('data contains a circular reference');
 
     requireDepth(walk);
+
     walk.ancestors.add(value);
 
     const items: unknown[] = [];
@@ -197,6 +157,7 @@ function cropValue(value: unknown, walk: Walk): unknown {
 
   if (isPlainObject(value)) {
     const container = value as Data;
+
     const keys = Object.keys(container);
 
     if (keys.length === 0) return isAllowedPath(walk.segments, walk.patterns) ? {} : PRUNED;
@@ -204,6 +165,7 @@ function cropValue(value: unknown, walk: Walk): unknown {
     if (walk.ancestors.has(container)) throw new RangeError('data contains a circular reference');
 
     requireDepth(walk);
+
     walk.ancestors.add(container);
 
     const cropped: Data = {};
@@ -220,6 +182,7 @@ function cropValue(value: unknown, walk: Walk): unknown {
       if (croppedValue === PRUNED) continue;
 
       setField(cropped, key, croppedValue);
+
       keptCount += 1;
     }
 
@@ -249,11 +212,6 @@ function cropData(data: Data, walk: Walk): Data {
   return cropped;
 }
 
-/**
- * Same walk as the crop, collecting the paths outside the permission instead of
- * copying. Nothing is copied here, so a node already open above this one is
- * reported as the leaf that closes the cycle instead of being followed.
- */
 function collectForbiddenPaths(value: unknown, walk: Walk, forbidden: Set<string>): void {
   if (Array.isArray(value)) {
     if (value.length === 0 || walk.ancestors.has(value)) {
@@ -263,6 +221,7 @@ function collectForbiddenPaths(value: unknown, walk: Walk, forbidden: Set<string
     }
 
     requireDepth(walk);
+
     walk.ancestors.add(value);
 
     for (const item of value) collectForbiddenPaths(item, walk, forbidden);
@@ -274,6 +233,7 @@ function collectForbiddenPaths(value: unknown, walk: Walk, forbidden: Set<string
 
   if (isPlainObject(value)) {
     const container = value as Data;
+
     const keys = Object.keys(container);
 
     if (keys.length === 0 || walk.ancestors.has(container)) {
@@ -283,11 +243,14 @@ function collectForbiddenPaths(value: unknown, walk: Walk, forbidden: Set<string
     }
 
     requireDepth(walk);
+
     walk.ancestors.add(container);
 
     for (const key of keys) {
       walk.segments.push(key);
+
       collectForbiddenPaths(container[key], walk, forbidden);
+
       walk.segments.pop();
     }
 
@@ -310,7 +273,9 @@ function rejectForbiddenPaths(data: Data, walk: Walk): void {
 
   for (const key of Object.keys(data)) {
     walk.segments.push(key);
+
     collectForbiddenPaths(data[key], walk, forbidden);
+
     walk.segments.pop();
   }
 
@@ -318,10 +283,9 @@ function rejectForbiddenPaths(data: Data, walk: Walk): void {
 
   const fields = [...forbidden];
 
-  throw Object.assign(
-    errors.create('PROPERTIES_NOT_ALLOWED', `fields not allowed: ${fields.join(', ')}`),
-    { fields },
-  );
+  const error = errors.create('PROPERTIES_NOT_ALLOWED', `fields not allowed: ${fields.join(', ')}`);
+
+  throw Object.assign(error, { fields });
 }
 
 export default properties;

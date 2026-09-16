@@ -33,6 +33,7 @@ export type Context = Record<string, unknown>;
 export type ContextValues = {
   roles: readonly string[];
   cropper: boolean;
+  reservedFields: readonly string[];
 };
 
 export type ContextKey = keyof ContextValues;

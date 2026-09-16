@@ -1,11 +1,13 @@
 import errors from './errors';
 import identifiers from './identifiers';
+import properties from './properties';
 import state from './state';
 import type { ContextKey, ContextValues } from './types';
 
 const context = Object.freeze({
   set<Key extends ContextKey>(key: Key, value: ContextValues[Key]): void {
     const contextKey = checkKey(key);
+
     const currentState = state.getOrCreate();
 
     state.requireOpen(currentState);
@@ -18,27 +20,34 @@ const context = Object.freeze({
       return;
     }
 
+    if (contextKey === 'reservedFields') {
+      currentState.reservedFields = Object.freeze(readReservedFields(value));
+
+      return;
+    }
+
     currentState.roles = new Set(readRoleCatalog(value, currentState.modules.size));
   },
 
   get<Key extends ContextKey>(key: Key): ContextValues[Key] {
     const contextKey = checkKey(key);
+
     const currentState = state.getOrCreate();
 
-    return (contextKey === 'cropper' ? currentState.cropper : [...currentState.roles]) as ContextValues[Key];
+    if (contextKey === 'cropper') return currentState.cropper as ContextValues[Key];
+
+    const paths: readonly string[] = contextKey === 'roles' ? [...currentState.roles] : [...currentState.reservedFields];
+
+    return paths as ContextValues[Key];
   },
 });
 
 function checkKey(key: unknown): ContextKey {
-  if (key === 'roles' || key === 'cropper') return key;
+  if (key === 'roles' || key === 'cropper' || key === 'reservedFields') return key;
 
   throw errors.create('INVALID_DEFINITION', `unknown context key: "${errors.describe(key)}"`);
 }
 
-/**
- * The catalog replaces the default `['general']` instead of extending it, so it
- * has to be declared before any permission is registered against a role.
- */
 function readRoleCatalog(value: unknown, registeredModuleCount: number): readonly string[] {
   if (registeredModuleCount > 0) {
     throw errors.create('INVALID_DEFINITION', 'roles must be declared before registering permissions: import pkit.config.js first');
@@ -59,6 +68,22 @@ function readRoleCatalog(value: unknown, registeredModuleCount: number): readonl
   for (const role of catalog) identifiers.checkRole(role);
 
   return catalog;
+}
+
+function readReservedFields(value: unknown): string[] {
+  if (!Array.isArray(value)) throw errors.create('INVALID_DEFINITION', 'reservedFields must be an array of property paths');
+
+  const fields: string[] = [];
+
+  for (const field of value) {
+    if (typeof field !== 'string') throw errors.create('INVALID_DEFINITION', 'reservedFields must be an array of property paths');
+
+    properties.checkDeclaredPath(field, 'reservedFields');
+
+    fields.push(field);
+  }
+
+  return fields;
 }
 
 export default context;

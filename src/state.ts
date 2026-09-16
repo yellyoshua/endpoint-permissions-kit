@@ -27,14 +27,11 @@ export interface Snapshot {
 export interface State {
   roles: Set<string>;
   cropper: boolean;
+  reservedFields: readonly string[];
   readonly modules: Map<string, ModuleEntry>;
   snapshot: Snapshot | null;
 }
 
-/**
- * The registry lives on globalThis so the ESM and CJS builds of the package
- * share one catalog inside a process.
- */
 const STATE_KEY = Symbol.for('endpoint-permissions-kit');
 
 const state = {
@@ -42,18 +39,22 @@ const state = {
     const stateHost = globalThis as typeof globalThis & { [STATE_KEY]?: State };
 
     if (stateHost[STATE_KEY] === undefined) {
-      stateHost[STATE_KEY] = { roles: new Set([constants.GENERAL_ROLE]), cropper: false, modules: new Map(), snapshot: null };
+      stateHost[STATE_KEY] = {
+        roles: new Set([constants.GENERAL_ROLE]),
+        cropper: false,
+        reservedFields: [],
+        modules: new Map(),
+        snapshot: null,
+      };
     }
 
     return stateHost[STATE_KEY];
   },
 
-  /** Every write to the registry goes through this: sealing freezes the configuration. */
   requireOpen(currentState: State): void {
     if (currentState.snapshot) throw errors.create('SEALED', 'pkit.seal() was already called: no more registrations allowed');
   },
 
-  /** Every read of a materialized view goes through this. */
   requireSnapshot(currentState: State): Snapshot {
     if (currentState.snapshot === null) {
       throw errors.create('NOT_SEALED', 'pkit.seal() has not been called: call it after importing every permission file');
