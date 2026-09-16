@@ -1,17 +1,17 @@
-import { context } from './context';
-import { defineModule } from './registry';
-import { seal } from './seal';
-import { permissions } from './permissions';
-import { validate } from './validate';
+import constants from './constants';
+import context from './context';
+import permissions from './permissions';
+import registry from './registry';
+import sealer from './seal';
+import validator from './validate';
 
 export type {
   ActionDef,
   ActionDefs,
-  Authorization,
   Context,
+  ContextKey,
+  ContextValues,
   Data,
-  FindInput,
-  FindResult,
   GrantDef,
   GrantDefs,
   HookFn,
@@ -20,23 +20,32 @@ export type {
   NamedPermissionCatalog,
   PermissionEntry,
   PermissionId,
+  PkitError,
   PkitErrorCode,
   Properties,
-  ResolvedPermission,
   Role,
   RoleRegistry,
   UserAssignments,
   UserPermissionMap,
+  ValidateData,
   ValidateInput,
   ValidateResult,
   ValidationError,
   ValidationErrorCode,
-  WriteInput,
 } from './types';
-export { METHODS } from './constants';
-export type { PkitError } from './errors';
+
 export type { GrantBuilder, ModuleBuilder, NameBuilder, RoleBuilder } from './registry';
-export { context, seal, permissions, validate, defineModule as module };
+
+export const METHODS = constants.METHODS;
+
+export const seal = sealer.seal;
+
+export const validate = validator.validate;
+
+const defineModule = registry.defineModule;
+
+export { context, permissions, defineModule as module };
 
 export const pkit = Object.freeze({ context, module: defineModule, seal, permissions, validate });
+
 export default pkit;

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { checkGenerated, generate } from '../src/cli/generate';
+import generator from '../src/cli/generate';
 
 const consumerDirectories: string[] = [];
 
@@ -19,7 +19,7 @@ describe('pkit generate', () => {
       const consumerDirectory = createConsumer(`
       pkit.context.set('roles', ['staff', 'content-manager']);
       `, 'pkit.config.mjs');
-      const generationResult = await generate({ cwd: consumerDirectory });
+      const generationResult = await generator.generate({ cwd: consumerDirectory });
 
       expect(readFileSync(generationResult.outPath, 'utf8')).toBe([
         "import 'endpoint-permissions-kit/types';",
@@ -39,11 +39,11 @@ describe('pkit generate', () => {
       console.log('stdout noise that must not break parsing');
       pkit.context.set('roles', ['admin', 'staff']);
       `, 'pkit.config.mjs');
-      const generationResult = await generate({ cwd: consumerDirectory });
+      const generationResult = await generator.generate({ cwd: consumerDirectory });
 
       expect(generationResult.roles).toEqual(['admin', 'staff']);
       expect(readFileSync(generationResult.outPath, 'utf8')).toContain('"admin": true;');
-      expect(await checkGenerated({ cwd: consumerDirectory })).toMatchObject({ isStale: false });
+      expect(await generator.checkGenerated({ cwd: consumerDirectory })).toMatchObject({ isStale: false });
     });
 
     test('propagates a config failure without overwriting the types', async () => {
@@ -52,7 +52,7 @@ describe('pkit generate', () => {
 
       writeFileSync(declarationPath, 'existing declarations');
 
-      await expect(generate({ cwd: consumerDirectory })).rejects.toThrow(/invalid permission configuration/);
+      await expect(generator.generate({ cwd: consumerDirectory })).rejects.toThrow(/invalid permission configuration/);
       expect(readFileSync(declarationPath, 'utf8')).toBe('existing declarations');
     });
   });
@@ -64,7 +64,7 @@ describe('pkit generate', () => {
       `, 'pkit.config.mjs');
 
       writeFileSync(join(consumerDirectory, 'pkit.generated.d.ts'), 'old');
-      const checkResult = await checkGenerated({ cwd: consumerDirectory });
+      const checkResult = await generator.checkGenerated({ cwd: consumerDirectory });
 
       expect(checkResult.isStale).toBe(true);
       expect(readFileSync(checkResult.outPath, 'utf8')).toBe('old');
@@ -74,11 +74,11 @@ describe('pkit generate', () => {
       const consumerDirectory = createConsumer('', 'roles.mjs');
       const options = { cwd: consumerDirectory, config: 'roles.mjs', out: 'roles.d.ts' };
 
-      expect(await checkGenerated(options)).toMatchObject({ isStale: true, roles: ['general'] });
+      expect(await generator.checkGenerated(options)).toMatchObject({ isStale: true, roles: ['general'] });
 
-      await generate(options);
+      await generator.generate(options);
 
-      expect(await checkGenerated(options)).toMatchObject({ isStale: false, outPath: join(consumerDirectory, 'roles.d.ts') });
+      expect(await generator.checkGenerated(options)).toMatchObject({ isStale: false, outPath: join(consumerDirectory, 'roles.d.ts') });
     });
   });
 
@@ -86,7 +86,7 @@ describe('pkit generate', () => {
     test('throws with the list of searched names when no config exists', async () => {
       const consumerDirectory = createConsumer('', 'unrelated.js');
 
-      await expect(generate({ cwd: consumerDirectory })).rejects.toThrow(/pkit\.config\.js \| pkit\.config\.mjs/);
+      await expect(generator.generate({ cwd: consumerDirectory })).rejects.toThrow(/pkit\.config\.js \| pkit\.config\.mjs/);
     });
   });
 });

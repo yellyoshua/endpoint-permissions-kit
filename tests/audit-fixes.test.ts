@@ -3,7 +3,7 @@ import pkit from '../src/index';
 import type { ValidationError } from '../src/types';
 import { resetState, setupInventory, STAFF_ITEMS_ALL } from './helpers';
 
-const staffItems = { action: 'inventory.items', name: 'all', role: 'staff', permissions: [STAFF_ITEMS_ALL] } as const;
+const staffItems = { action: 'inventory.items', role: 'staff', permissions: [STAFF_ITEMS_ALL] } as const;
 const INVALID_DEFINITION = expect.objectContaining({ code: 'INVALID_DEFINITION' });
 
 let hookRuns = 0;
@@ -100,7 +100,7 @@ describe('audit fixes', () => {
   });
 
   describe('grant union', () => {
-    test('keeps insertion order without duplicates when uniting grants', async () => {
+    test('unites the fields of every applicable grant', async () => {
       resetState();
       pkit.context.set('roles', ['staff']);
       pkit.module('s1').name('all').role('staff').registerActions({ find: { enabled: true, properties: ['x'] } });
@@ -112,9 +112,13 @@ describe('audit fixes', () => {
       target.grantTo('staff::s2::all').registerActions({ find: { enabled: true, properties: ['c', 'a'] } });
       pkit.seal();
 
-      const validation = await pkit.validate({ action: 't', name: 'all', method: 'find', role: 'staff', permissions: ['staff::s1::all', 'staff::s2::all'] });
+      const assignments = { action: 't', method: 'find', role: 'staff', permissions: ['staff::s1::all', 'staff::s2::all'] } as const;
 
-      expect(validation.result).toEqual(['b', 'a', 'c']);
+      expect((await pkit.validate({ ...assignments, data: { a: 1, b: 2, c: 3 } })).errors).toEqual([]);
+
+      const denied = await pkit.validate({ ...assignments, data: { a: 1, d: 4 } });
+
+      expect(denied.errors).toEqual([expect.objectContaining({ code: 'PROPERTIES_NOT_ALLOWED', fields: ['d'] })]);
     });
   });
 });

@@ -112,6 +112,7 @@ describe('registry', () => {
     test('accepts a role hook whose only path is a grant and mutual grants', () => {
       const { itemsUpdateOnly, reports } = setupInventory();
 
+      itemsUpdateOnly.grantTo(ADMIN_REPORTS).registerActions(findId);
       itemsUpdateOnly.role('admin').hook('find', allowHook);
       reports.grantTo('staff::inventory.items::all').registerActions(findId);
       pkit.seal();

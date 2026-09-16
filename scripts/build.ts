@@ -10,7 +10,7 @@ async function buildBundles(format: 'esm' | 'cjs', entrypoints: string[]): Promi
     outdir: `./dist/${format}`,
     target: 'node',
     format,
-    packages: 'external',
+    packages: format === 'cjs' ? 'bundle' : 'external',
     sourcemap: 'external',
     naming: format === 'cjs' ? '[dir]/[name].cjs' : '[dir]/[name].js',
   });

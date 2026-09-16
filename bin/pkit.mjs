@@ -1,4 +1,4 @@
 #!/usr/bin/env node
-import { main } from '../dist/esm/cli/generate.js';
+import generator from '../dist/esm/cli/generate.js';
 
-await main(process.argv.slice(2));
+await generator.main(process.argv.slice(2));

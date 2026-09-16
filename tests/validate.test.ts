@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import pkit from '../src/index';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Context, Data, ResolvedPermission } from '../src/types';
+import type { Context, Data, ValidationError } from '../src/types';
 import { ADMIN_REPORTS, ADMIN_ITEMS_ALL, STAFF_REPORTS, STAFF_ITEMS_ALL, STAFF_ITEMS_UPDATE_ONLY, resetState, setupInventory } from './helpers';
 
 const action = 'inventory.items';
-const staffReports = { action, name: 'all', role: 'staff', permissions: [STAFF_REPORTS] } as const;
-const adminReports = { action, name: 'all', role: 'admin', permissions: [ADMIN_REPORTS] } as const;
-const staffItems = { action, name: 'all', role: 'staff', permissions: [STAFF_ITEMS_ALL] } as const;
-const adminItems = { action, name: 'all', role: 'admin', permissions: [ADMIN_ITEMS_ALL] } as const;
+const staffReports = { action, role: 'staff', permissions: [STAFF_REPORTS] } as const;
+const adminReports = { action, role: 'admin', permissions: [ADMIN_REPORTS] } as const;
+const staffItems = { action, role: 'staff', permissions: [STAFF_ITEMS_ALL] } as const;
+const adminItems = { action, role: 'admin', permissions: [ADMIN_ITEMS_ALL] } as const;
 const SOURCE = 'staff::source::all';
 const OTHER = 'staff::other::all';
-const targetRequest = { action: 'target', name: 'all', role: 'staff', method: 'find' } as const;
+const targetRequest = { action: 'target', role: 'staff', method: 'find' } as const;
 
 describe('validate', () => {
   beforeEach(resetState);
@@ -27,24 +27,24 @@ describe('validate', () => {
   });
 
   describe('denial order', () => {
-    test('denies in order: input, role, assignments, module and name, assignment, method', async () => {
+    test('denies in order: input, role, assignments, module, name, assignment, method', async () => {
       setupInventory();
       pkit.seal();
 
-      expect(errorCodes(await pkit.validate({ action, name: 'all', method: 'find', permissions: [] } as never))).toEqual(['INVALID_INPUT']);
-      expect(errorCodes(await pkit.validate({ action, name: 'all', method: 'find', role: 'staff' } as never))).toEqual(['INVALID_INPUT']);
-      expect(errorCodes(await pkit.validate({ action, method: 'find', role: 'staff', permissions: [] } as never))).toEqual(['INVALID_INPUT']);
+      expect(errorCodes(await pkit.validate({ action, method: 'find', permissions: [] } as never))).toEqual(['INVALID_INPUT']);
+      expect(errorCodes(await pkit.validate({ action, method: 'find', role: 'staff' } as never))).toEqual(['INVALID_INPUT']);
+      expect(errorCodes(await pkit.validate({ method: 'find', role: 'staff', permissions: [] } as never))).toEqual(['INVALID_INPUT']);
       expect(errorCodes(await pkit.validate({ ...staffReports, method: 'find', role: 'nobody' as never }))).toEqual(['UNKNOWN_ROLE']);
       expect(errorCodes(await pkit.validate({ ...staffReports, method: 'find', permissions: ['staff::x'] }))).toEqual(['INVALID_INPUT']);
       expect(errorCodes(await pkit.validate({ ...staffReports, action: 'x.y', method: 'find', permissions: [ADMIN_REPORTS] }))).toEqual(['PERMISSION_ROLE_MISMATCH']);
       expect(errorCodes(await pkit.validate({ ...staffReports, method: 'find', permissions: [STAFF_REPORTS, 'staff::inventory.items::old'] }))).toEqual(['UNKNOWN_PERMISSION']);
       expect(errorCodes(await pkit.validate({ ...staffReports, method: 'find', permissions: ['admin::inventory.items::update-only'] }))).toEqual(['PERMISSION_ROLE_MISMATCH']);
       expect(errorCodes(await pkit.validate({ ...staffReports, action: 'x.y', method: 'find' }))).toEqual(['UNKNOWN_ACTION']);
-      expect(errorCodes(await pkit.validate({ ...staffReports, name: 'missing', method: 'find' }))).toEqual(['UNKNOWN_PERMISSION']);
+      expect(errorCodes(await pkit.validate({ ...staffReports, method: 'find', permissions: [STAFF_ITEMS_ALL, STAFF_ITEMS_UPDATE_ONLY] }))).toEqual(['AMBIGUOUS_PERMISSION']);
       expect(errorCodes(await pkit.validate({ ...adminReports, method: 'find', permissions: [] }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
-      expect(errorCodes(await pkit.validate({ ...staffReports, name: 'update-only', method: 'update', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
+      expect(errorCodes(await pkit.validate({ ...staffReports, method: 'update', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
       expect(errorCodes(await pkit.validate({ ...staffItems, method: 'remove', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
-      expect(errorCodes(await pkit.validate({ action, name: 'all', method: 'find', role: 'public', permissions: ['public::inventory.items::all'] }))).toEqual(['METHOD_DISABLED']);
+      expect(errorCodes(await pkit.validate({ action, method: 'find', role: 'public', permissions: ['public::inventory.items::all'] }))).toEqual(['METHOD_DISABLED']);
     });
   });
 
@@ -53,17 +53,19 @@ describe('validate', () => {
       setupInventory();
       pkit.seal();
 
-      expect(await pkit.validate({ ...adminReports, method: 'find' })).toEqual({ result: ['id', 'name', 'assetId'], errors: [] });
-      expect((await pkit.validate({ ...adminReports, method: 'find', select: ['id', 'internalNotes'] })).result).toEqual(['id']);
-      expect((await pkit.validate({ ...adminReports, name: 'update-only', method: 'find' })).result).toEqual(['id', 'name', 'assetId']);
-      expect((await pkit.validate({ ...staffReports, method: 'find' })).result).toEqual(['id', 'name', 'assetId']);
+      const data = { id: 1, name: 'x', assetId: 'a' };
+
+      expect(await pkit.validate({ ...adminReports, method: 'find', data })).toEqual({ result: { data }, errors: [] });
+      expect(errorFields(await pkit.validate({ ...adminReports, method: 'find', data: { id: 1, internalNotes: 'x' } }))).toEqual(['internalNotes']);
+      expect((await pkit.validate({ ...adminReports, method: 'find', data: { assetId: 'a' } })).errors).toEqual([]);
+      expect((await pkit.validate({ ...staffReports, method: 'find', data })).errors).toEqual([]);
     });
 
     test('prefers the direct assignment over a grant even when narrower', async () => {
       setupInventory();
       pkit.seal();
 
-      expect((await pkit.validate({ ...adminReports, method: 'find', permissions: [ADMIN_REPORTS, ADMIN_ITEMS_ALL] })).result).toBe('*');
+      expect((await pkit.validate({ ...adminReports, method: 'find', data: { internalNotes: 'x' }, permissions: [ADMIN_REPORTS, ADMIN_ITEMS_ALL] })).errors).toEqual([]);
 
       resetState();
       const { target, source } = setupGraph();
@@ -73,14 +75,14 @@ describe('validate', () => {
       target.grantTo(SOURCE).registerActions({ find: { enabled: true, properties: ['id', 'name'] } });
       pkit.seal();
 
-      expect((await pkit.validate({ ...targetRequest, permissions: [SOURCE] })).result).toEqual(['id', 'name']);
-      expect((await pkit.validate({ ...targetRequest, permissions: [SOURCE, 'staff::target::all'] })).result).toEqual(['id']);
+      expect((await pkit.validate({ ...targetRequest, data: { id: 1, name: 'x' }, permissions: [SOURCE] })).errors).toEqual([]);
+      expect(errorFields(await pkit.validate({ ...targetRequest, data: { id: 1, name: 'x' }, permissions: [SOURCE, 'staff::target::all'] }))).toEqual(['name']);
     });
 
     test('unites fields from several grants and runs hooks once', async () => {
       const { target, source, other } = setupGraph();
       const executedHooks: string[] = [];
-      const capturedPermissions: ResolvedPermission[] = [];
+      const capturedPermissions: (readonly string[])[] = [];
 
       target.role('staff').registerActions({ find: { enabled: true, properties: ['id'] } });
       source.role('staff').registerActions({ find: { enabled: true, properties: '*' } });
@@ -89,34 +91,38 @@ describe('validate', () => {
       target.grantTo(SOURCE).registerActions({ find: { enabled: true, properties: ['id', 'name'] } });
       target.hook('find', recordHook.bind(null, executedHooks, 'name'));
       target.role('staff').hook('find', recordHook.bind(null, executedHooks, 'staff'));
-      target.role('staff').hook('find', capturePermission.bind(null, capturedPermissions));
+      target.role('staff').hook('find', capturePermissions.bind(null, capturedPermissions));
       pkit.seal();
 
-      const validation = await pkit.validate({ ...targetRequest, permissions: [OTHER, SOURCE] });
+      const data = { name: 'x', extra: true, id: 1 };
+      const validation = await pkit.validate({ ...targetRequest, data, permissions: [OTHER, SOURCE] });
 
-      expect(validation).toEqual({ result: ['name', 'extra', 'id'], errors: [] });
+      expect(validation).toEqual({ result: { data }, errors: [] });
       expect(executedHooks).toEqual(['name', 'staff']);
-      expect(capturedPermissions[0]?.authorization).toEqual({ direct: false, grantedBy: [OTHER, SOURCE] });
+      expect(capturedPermissions[0]).toEqual([OTHER, SOURCE]);
+      expect(errorFields(await pkit.validate({ ...targetRequest, data: { other: 1 }, permissions: [OTHER, SOURCE] }))).toEqual(['other']);
     });
 
     test('enables only declared methods per grant and direct assignment', async () => {
       setupInventory();
       pkit.seal();
 
-      expect(errorCodes(await pkit.validate({ ...staffReports, name: 'update-only', method: 'update', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
+      expect(errorCodes(await pkit.validate({ ...staffReports, method: 'update', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
 
       const data = { id: 1, name: 'Item' };
-      const validation = await pkit.validate({ action, name: 'update-only', method: 'update', role: 'staff', permissions: [STAFF_ITEMS_UPDATE_ONLY], data });
+      const validation = await pkit.validate({ action, method: 'update', role: 'staff', permissions: [STAFF_ITEMS_UPDATE_ONLY], data });
 
-      expect(validation).toEqual({ result: data, errors: [] });
+      expect(validation).toEqual({ result: { data }, errors: [] });
     });
 
     test('keeps different names independent', async () => {
       setupInventory();
       pkit.seal();
 
-      expect(errorCodes(await pkit.validate({ ...staffItems, name: 'update-only', method: 'find' }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
-      expect(errorCodes(await pkit.validate({ ...staffItems, method: 'find', permissions: [STAFF_ITEMS_UPDATE_ONLY] }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
+      const updateOnly = { action, role: 'staff', permissions: [STAFF_ITEMS_UPDATE_ONLY] } as const;
+
+      expect((await pkit.validate({ ...updateOnly, method: 'update', data: { assetId: 'a' } })).errors).toEqual([]);
+      expect(errorFields(await pkit.validate({ ...staffItems, method: 'update', data: { assetId: 'a' } }))).toEqual(['assetId']);
     });
 
     test('denies an empty list and deduplicates repeated identifiers', async () => {
@@ -128,9 +134,9 @@ describe('validate', () => {
 
       expect(errorCodes(await pkit.validate({ ...staffReports, method: 'find', permissions: [] }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
 
-      const validation = await pkit.validate({ ...staffReports, method: 'find', permissions: [STAFF_REPORTS, STAFF_REPORTS] });
+      const validation = await pkit.validate({ ...staffReports, method: 'find', data: { id: 1, name: 'x', assetId: 'a' }, permissions: [STAFF_REPORTS, STAFF_REPORTS] });
 
-      expect(validation.result).toEqual(['id', 'name', 'assetId']);
+      expect(validation.errors).toEqual([]);
       expect(executedHooks).toEqual(['staff']);
     });
 
@@ -143,7 +149,7 @@ describe('validate', () => {
       pkit.seal();
 
       expect(errorCodes(await pkit.validate({ ...targetRequest, permissions: [SOURCE, 'staff::target::all'] }))).toEqual(['METHOD_DISABLED']);
-      expect((await pkit.validate({ ...targetRequest, permissions: [SOURCE] })).result).toEqual(['id']);
+      expect((await pkit.validate({ ...targetRequest, data: { id: 1 }, permissions: [SOURCE] })).errors).toEqual([]);
     });
 
     test('grants from a source whose methods are all disabled', async () => {
@@ -154,7 +160,7 @@ describe('validate', () => {
       target.grantTo(SOURCE).registerActions({ find: { enabled: true, properties: ['id'] } });
       pkit.seal();
 
-      expect((await pkit.validate({ ...targetRequest, permissions: [SOURCE] })).result).toEqual(['id']);
+      expect((await pkit.validate({ ...targetRequest, data: { id: 1 }, permissions: [SOURCE] })).errors).toEqual([]);
       expect(errorCodes(await pkit.validate({ ...targetRequest, action: 'source', permissions: [SOURCE] }))).toEqual(['METHOD_DISABLED']);
     });
 
@@ -168,7 +174,7 @@ describe('validate', () => {
       source.grantTo(OTHER).registerActions({ find: { enabled: true, properties: ['id'] } });
       pkit.seal();
 
-      expect((await pkit.validate({ ...targetRequest, action: 'source', permissions: [OTHER] })).result).toEqual(['id']);
+      expect((await pkit.validate({ ...targetRequest, action: 'source', data: { id: 1 }, permissions: [OTHER] })).errors).toEqual([]);
       expect(errorCodes(await pkit.validate({ ...targetRequest, permissions: [OTHER] }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
     });
   });
@@ -206,36 +212,24 @@ describe('validate', () => {
 
       executedHooks.length = 0;
 
-      const staffUpdate = await pkit.validate({ ...staffItems, method: 'update', data: { id: 1, name: 'x' }, context: { user: { id: 1 }, resource: { owner: 2 } } });
+      const staffUpdate = await pkit.validate({ ...staffItems, method: 'update', data: { id: 1, name: 'x' }, context: { user: { id: 1 }, owner: 2 } });
 
       expect(executedHooks).toEqual(['module', 'staff']);
       expect(staffUpdate.errors).toEqual([{ code: 'HOOK_ERROR', message: 'not owner', cause: expect.any(Error) }]);
     });
 
-    test('passes the effective target and authorization source to hooks', async () => {
+    test('passes the user permissions to hooks without resolving them', async () => {
       const { itemsAll } = setupInventory();
-      const capturedPermissions: ResolvedPermission[] = [];
+      const capturedPermissions: (readonly string[])[] = [];
 
-      itemsAll.role('staff').hook('find', capturePermission.bind(null, capturedPermissions));
+      itemsAll.role('staff').hook('find', capturePermissions.bind(null, capturedPermissions));
       pkit.seal();
 
       await pkit.validate({ ...staffReports, method: 'find' });
       await pkit.validate({ ...staffItems, method: 'find', permissions: [STAFF_ITEMS_ALL, STAFF_REPORTS] });
 
-      expect(capturedPermissions[0]).toEqual({
-        role: 'staff',
-        action,
-        name: 'all',
-        permissionId: STAFF_ITEMS_ALL,
-        method: 'find',
-        enabled: true,
-        properties: ['id', 'name', 'assetId'],
-        authorization: { direct: false, grantedBy: [STAFF_REPORTS] },
-      });
-      expect(capturedPermissions[1]?.authorization).toEqual({ direct: true, grantedBy: [] });
-      expect(Object.isFrozen(capturedPermissions[0])).toBe(true);
-      expect(Object.isFrozen(capturedPermissions[0]?.authorization)).toBe(true);
-      expect(Object.isFrozen(capturedPermissions[0]?.authorization.grantedBy)).toBe(true);
+      expect(capturedPermissions[0]).toEqual([STAFF_REPORTS]);
+      expect(capturedPermissions[1]).toEqual([STAFF_ITEMS_ALL, STAFF_REPORTS]);
     });
 
     test('keeps all concurrent hook failures in registration order', async () => {
@@ -260,7 +254,7 @@ describe('validate', () => {
       expect(Object.isFrozen(validation.errors)).toBe(true);
     });
 
-    test('skips hooks when fields are denied', async () => {
+    test('skips hooks when data keys are denied', async () => {
       const { items } = setupInventory();
       const executedHooks: string[] = [];
 
@@ -271,10 +265,10 @@ describe('validate', () => {
       expect(executedHooks).toEqual([]);
     });
 
-    test('passes missing optional arguments to hooks without substitution', async () => {
+    test('substitutes missing data and context with empty objects before the hooks', async () => {
       const { items } = setupInventory();
 
-      items.hook('find', expectMissingArguments);
+      items.hook('find', expectEmptyArguments);
       pkit.seal();
 
       expect((await pkit.validate({ ...staffReports, method: 'find' })).errors).toEqual([]);
@@ -295,24 +289,18 @@ describe('validate', () => {
     });
   });
 
-  describe('field selection', () => {
-    test('trims select to properties and defaults select to properties on find', async () => {
+  describe('data properties', () => {
+    test('accepts a subset of the permission properties on every method', async () => {
       setupInventory();
       pkit.seal();
 
-      expect(await pkit.validate({ ...staffItems, method: 'find', select: ['id', 'owner'] })).toEqual({ result: ['id'], errors: [] });
-      expect((await pkit.validate({ ...staffItems, method: 'find' })).result).toEqual(['id', 'name', 'assetId']);
+      expect((await pkit.validate({ ...staffItems, method: 'find', data: { id: 1 } })).errors).toEqual([]);
+      expect((await pkit.validate({ ...staffItems, method: 'update', data: { id: 1, name: 'x' } })).errors).toEqual([]);
+      expect((await pkit.validate({ ...adminItems, method: 'create', data: { name: 'x', link: 'y' } })).errors).toEqual([]);
+      expect((await pkit.validate({ ...adminItems, method: 'remove', data: { id: 1 } })).errors).toEqual([]);
     });
 
-    test("returns select or '*' when find properties are '*'", async () => {
-      setupInventory();
-      pkit.seal();
-
-      expect((await pkit.validate({ ...adminItems, method: 'find' })).result).toBe('*');
-      expect((await pkit.validate({ ...adminItems, method: 'find', select: ['owner'] })).result).toEqual(['owner']);
-    });
-
-    test('denies writes with fields outside properties and lists them', async () => {
+    test('denies data keys outside the permission and lists them', async () => {
       setupInventory();
       pkit.seal();
 
@@ -320,23 +308,47 @@ describe('validate', () => {
 
       expect(validation.result).toBeNull();
       expect(validation.errors).toEqual([
-        { code: 'PROPERTIES_NOT_ALLOWED', message: expect.stringMatching(/owner, status$/), fields: ['owner', 'status'] },
+        { code: 'PROPERTIES_NOT_ALLOWED', message: 'fields not allowed: owner, status', fields: ['owner', 'status'] },
       ]);
+      expect(errorFields(await pkit.validate({ ...staffItems, method: 'find', data: { owner: 2 } }))).toEqual(['owner']);
     });
 
-    test('returns typed data on valid writes and accepts any field with *', async () => {
+    test('reports escaped dots and keys carrying undefined', async () => {
+      setupInventory();
+      pkit.seal();
+
+      expect(errorFields(await pkit.validate({ ...staffItems, method: 'update', data: { 'a.b': 1 } }))).toEqual(['a.b']);
+      expect(errorFields(await pkit.validate({ ...staffItems, method: 'update', data: { id: 1, owner: undefined } }))).toEqual(['owner']);
+    });
+
+    test('accepts empty data and any field with *', async () => {
+      setupInventory();
+      pkit.seal();
+
+      expect((await pkit.validate({ ...staffItems, method: 'find' })).errors).toEqual([]);
+      expect((await pkit.validate({ ...staffItems, method: 'update', data: {} })).errors).toEqual([]);
+      expect((await pkit.validate({ ...adminItems, method: 'update', data: { owner: 9, anything: true } })).errors).toEqual([]);
+    });
+
+    test('returns the same data object when nothing is cropped', async () => {
       setupInventory();
       pkit.seal();
 
       const data = { id: 1, name: 'x' };
       const validation = await pkit.validate({ ...staffItems, method: 'update', data });
 
-      expect(validation.result).toBe(data);
-      expect(validation.result?.id).toBe(1);
-      expect((await pkit.validate({ ...adminItems, method: 'update', data: { owner: 9 } })).errors).toEqual([]);
+      expect(validation.result?.data).toBe(data);
     });
 
-    test('reads request data once for fields, hooks and result', async () => {
+    test('defaults data to an empty object on every method', async () => {
+      setupInventory();
+      pkit.seal();
+
+      expect(await pkit.validate({ ...adminItems, method: 'update' })).toEqual({ result: { data: {} }, errors: [] });
+      expect(await pkit.validate({ ...staffItems, method: 'find' })).toEqual({ result: { data: {} }, errors: [] });
+    });
+
+    test('reads request data once for the hooks and the result', async () => {
       setupInventory();
       pkit.seal();
 
@@ -346,21 +358,150 @@ describe('validate', () => {
 
       Object.defineProperty(input, 'data', { get: readRecordedData.bind(null, reads, data) });
 
-      expect(await pkit.validate(input)).toEqual({ result: data, errors: [] });
+      expect(await pkit.validate(input)).toEqual({ result: { data }, errors: [] });
       expect(reads).toEqual([1]);
     });
   });
 
-  describe('input validation', () => {
-    test('rejects select outside find as a programming error', async () => {
+  describe('cropper', () => {
+    test('crops data to the properties of the permission', async () => {
       setupInventory();
+      pkit.context.set('cropper', true);
       pkit.seal();
 
-      expect(await pkit.validate({ ...adminItems, method: 'update', select: ['id'] } as never)).toEqual({
-        result: null, errors: [{ code: 'INVALID_INPUT', message: 'select only applies to find' }],
-      });
+      const data = { id: 1, name: 'x', owner: 2, missing: undefined };
+      const validation = await pkit.validate({ ...staffItems, method: 'update', data });
+
+      expect(validation).toEqual({ result: { data: { id: 1, name: 'x' } }, errors: [] });
+      expect(validation.result?.data).not.toBe(data);
     });
 
+    test('never denies data keys outside the permission', async () => {
+      setupInventory();
+      pkit.context.set('cropper', true);
+      pkit.seal();
+
+      expect(await pkit.validate({ ...staffItems, method: 'find', data: { owner: 2 } })).toEqual({ result: { data: {} }, errors: [] });
+    });
+
+    test('leaves data untouched with *', async () => {
+      setupInventory();
+      pkit.context.set('cropper', true);
+      pkit.seal();
+
+      const data = { name: { first: 'x', tags: ['a'] }, owner: 2 };
+
+      expect((await pkit.validate({ ...adminItems, method: 'update', data })).result?.data).toBe(data);
+    });
+
+    test('passes the cropped data to the hooks', async () => {
+      const { items } = setupInventory();
+      const capturedData: Data[] = [];
+
+      items.hook('update', captureData.bind(null, capturedData));
+      pkit.context.set('cropper', true);
+      pkit.seal();
+
+      await pkit.validate({ ...staffItems, method: 'update', data: { id: 1, owner: 2 } });
+
+      expect(capturedData[0]).toEqual({ id: 1 });
+    });
+
+    test('is frozen by seal() and rejects a non boolean', () => {
+      setupInventory();
+
+      expect(pkit.context.get('cropper')).toBe(false);
+      pkit.context.set('cropper', true);
+      expect(pkit.context.get('cropper')).toBe(true);
+      expect(pkit.context.set.bind(null, 'cropper', 'yes' as never)).toThrow(/cropper must be a boolean/);
+
+      pkit.seal();
+
+      expect(pkit.context.set.bind(null, 'cropper', false)).toThrow(/pkit.seal\(\) was already called/);
+      expect(pkit.context.get.bind(null, 'sorter' as never)).toThrow(/unknown context key/);
+    });
+  });
+
+  describe('nested properties', () => {
+    test('matches literal paths and denies anything else under them', async () => {
+      setupNested(['unicorn.name']);
+
+      expect((await validateNested({ unicorn: { name: 'Rainbow Dash' } })).errors).toEqual([]);
+      expect(errorFields(await validateNested({ unicorn: { name: 'x', color: 'y' } }))).toEqual(['unicorn.color']);
+    });
+
+    test('matches exactly one segment per wildcard', async () => {
+      setupNested(['unicorn.*']);
+
+      expect((await validateNested({ unicorn: { name: 'x', color: 'y' } })).errors).toEqual([]);
+      expect(errorFields(await validateNested({ unicorn: { treasures: [{ id: 1 }] } }))).toEqual(['unicorn.treasures.id']);
+
+      resetState();
+      setupNested(['unicorn.treasures.*']);
+
+      expect((await validateNested({ unicorn: { treasures: [{ id: 1, secret: 's' }, { id: 2 }] } })).errors).toEqual([]);
+
+      resetState();
+      setupNested(['unicorn.treasures.id']);
+
+      expect(errorFields(await validateNested({ unicorn: { treasures: [{ id: 1, secret: 's' }, { id: 2, secret: 't' }] } }))).toEqual(['unicorn.treasures.secret']);
+    });
+
+    test('matches a wildcard segment against an empty container', async () => {
+      setupNested(['unicorn.*']);
+
+      expect((await validateNested({ unicorn: { name: 'x' } })).errors).toEqual([]);
+      expect((await validateNested({ unicorn: { treasures: {} } })).errors).toEqual([]);
+      expect(errorFields(await validateNested({ secret: { name: 'x' } }))).toEqual(['secret.name']);
+    });
+
+    test('treats a literal path as the exact leaf, not as a prefix', async () => {
+      setupNested(['unicorn']);
+
+      expect((await validateNested({ unicorn: {} })).errors).toEqual([]);
+      expect((await validateNested({ unicorn: [] })).errors).toEqual([]);
+      expect(errorFields(await validateNested({ unicorn: { name: 'x' } }))).toEqual(['unicorn.name']);
+    });
+
+    test('drops array indexes, including nested arrays', async () => {
+      setupNested(['tags', 'matrix', 'unicorn.treasures.id']);
+
+      expect((await validateNested({ tags: ['a', 'b'] })).errors).toEqual([]);
+      expect((await validateNested({ matrix: [[1, 2], [3]] })).errors).toEqual([]);
+      expect((await validateNested({ unicorn: { treasures: [{ id: 1 }, { id: 2 }] } })).errors).toEqual([]);
+      expect(errorFields(await validateNested({ tags: [{ label: 'a' }] }))).toEqual(['tags.label']);
+    });
+
+    test('rejects array indexes, empty segments and a leading wildcard in the declared properties', () => {
+      setupInventory();
+      const fresh = pkit.module('inventory').name('fresh').role('staff');
+
+      expect(fresh.registerActions.bind(null, { update: { enabled: true, properties: ['treasures[0]'] } })).toThrow(/array indexes are not allowed/);
+      expect(fresh.registerActions.bind(null, { update: { enabled: true, properties: ['unicorn..name'] } })).toThrow(/empty segment/);
+      expect(fresh.registerActions.bind(null, { update: { enabled: true, properties: ['unicorn.'] } })).toThrow(/empty segment/);
+      expect(fresh.registerActions.bind(null, { update: { enabled: true, properties: ['*.name'] } })).toThrow(/cannot start with/);
+      expect(fresh.registerActions.bind(null, { update: { enabled: true, properties: ['*.*'] } })).toThrow(/cannot start with/);
+    });
+
+    test('crops nested paths, compacts arrays and prunes what it empties', async () => {
+      setupNested(['id', 'unicorn.treasures.id'], true);
+
+      const data = { id: 7, secret: 's', unicorn: { color: 'c', treasures: [{ id: 1, secret: 's' }, { secret: 't' }] } };
+      const validation = await validateNested(data);
+
+      expect(validation.result?.data).toEqual({ id: 7, unicorn: { treasures: [{ id: 1 }] } });
+      expect(data.unicorn.treasures.length).toBe(2);
+    });
+
+    test('keeps containers that were already empty and returns an empty object when nothing survives', async () => {
+      setupNested(['unicorn'], true);
+
+      expect((await validateNested({ unicorn: {}, other: 1 })).result?.data).toEqual({ unicorn: {} });
+      expect((await validateNested({ other: 1 })).result?.data).toEqual({});
+    });
+  });
+
+  describe('input validation', () => {
     test.each([{ data: null }, { data: false }, { data: 1 }, { data: 'invalid' }, { data: [] }])('rejects invalid data %j even with wildcard properties', async ({ data }: { data: unknown }) => {
       setupInventory();
       pkit.seal();
@@ -373,23 +514,6 @@ describe('validate', () => {
       pkit.seal();
 
       expect(errorCodes(await pkit.validate({ ...adminItems, method: 'find', context } as never))).toEqual(['INVALID_INPUT']);
-    });
-
-    test.each([{ select: null }, { select: 'id' }, { select: [1] }])('rejects invalid select %j without skipping field evaluation', async ({ select }: { select: unknown }) => {
-      setupInventory();
-      pkit.seal();
-
-      expect(errorCodes(await pkit.validate({ ...adminItems, method: 'find', select } as never))).toEqual(['INVALID_INPUT']);
-      expect(errorCodes(await pkit.validate({ ...staffItems, method: 'find', select } as never))).toEqual(['INVALID_INPUT']);
-    });
-
-    test('rejects writes without data instead of fabricating an empty object', async () => {
-      setupInventory();
-      pkit.seal();
-
-      expect(await pkit.validate({ ...adminItems, method: 'update' } as never)).toEqual({
-        result: null, errors: [{ code: 'INVALID_INPUT', message: 'data must be an object' }],
-      });
     });
 
     test('keeps the cause of unexpected failures inside validate', async () => {
@@ -406,12 +530,30 @@ describe('validate', () => {
   });
 });
 
+function setupNested(properties: readonly string[], cropper?: boolean): void {
+  resetState();
+  pkit.context.set('roles', ['staff']);
+  if (cropper === true) pkit.context.set('cropper', true);
+  pkit.module('catalog').name('all').role('staff').registerActions({ update: { enabled: true, properties } });
+  pkit.seal();
+}
+
+async function validateNested(data: Data) {
+  return pkit.validate({ action: 'catalog', method: 'update', role: 'staff', permissions: ['staff::catalog::all'], data });
+}
+
 function errorCodes(validation: { errors: readonly { code: string }[] }): string[] {
   const codes: string[] = [];
 
   for (const error of validation.errors) codes.push(error.code);
 
   return codes;
+}
+
+function errorFields(validation: { errors: readonly ValidationError[] }): readonly string[] | undefined {
+  const [error] = validation.errors;
+
+  return error?.code === 'PROPERTIES_NOT_ALLOWED' ? error.fields : undefined;
 }
 
 function setupGraph() {
@@ -428,22 +570,26 @@ function recordHook(executedHooks: string[], label: string): void {
   executedHooks.push(label);
 }
 
-function capturePermission(permissions: ResolvedPermission[], _data: Data | undefined, _context: Context | undefined, permission: ResolvedPermission): void {
-  permissions.push(permission);
+function capturePermissions(captured: (readonly string[])[], _data: Data, _context: Context, permissions: readonly string[]): void {
+  captured.push(permissions);
+}
+
+function captureData(captured: Data[], data: Data): void {
+  captured.push(data);
 }
 
 function throwHookFailure(cause: unknown): never {
   throw cause;
 }
 
-function checkPublication(executedHooks: string[], data: Data | undefined): void {
+function checkPublication(executedHooks: string[], data: Data): void {
   executedHooks.push('module');
-  if (data!.status === 'published') throw new Error('published');
+  if (data.status === 'published') throw new Error('published');
 }
 
-function checkOwner(executedHooks: string[], data: Data | undefined, context: Context | undefined): void {
+function checkOwner(executedHooks: string[], _data: Data, context: Context): void {
   executedHooks.push('staff');
-  if (data!.owner !== (context!.user as { id: number }).id) throw new Error('not owner');
+  if (context.owner !== (context.user as { id: number }).id) throw new Error('not owner');
 }
 
 async function failRecordedHook(completionOrder: string[], failure: { label: string; cause: unknown; delay: number }): Promise<never> {
@@ -453,9 +599,10 @@ async function failRecordedHook(completionOrder: string[], failure: { label: str
   throw failure.cause;
 }
 
-function expectMissingArguments(data: Data | undefined, context: Context | undefined): void {
-  expect(data).toBeUndefined();
-  expect(context).toBeUndefined();
+function expectEmptyArguments(data: Data, context: Context, permissions: readonly string[]): void {
+  expect(data).toEqual({});
+  expect(context).toEqual({});
+  expect(permissions).toEqual([STAFF_REPORTS]);
 }
 
 function readRecordedData(reads: number[], data: Data): Data {

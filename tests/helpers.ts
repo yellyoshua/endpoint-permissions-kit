@@ -1,6 +1,6 @@
 import pkit from '../src/index';
-import { GENERAL_ROLE } from '../src/constants';
-import { getOrCreateState } from '../src/state';
+import constants from '../src/constants';
+import state from '../src/state';
 
 export const STAFF_REPORTS = 'staff::inventory.reports::all';
 export const ADMIN_REPORTS = 'admin::inventory.reports::all';
@@ -11,11 +11,12 @@ export const STAFF_ITEMS_UPDATE_ONLY = 'staff::inventory.items::update-only';
 const ITEM_SUMMARY = { find: { enabled: true, properties: ['id', 'name', 'assetId'] } } as const;
 
 export function resetState(): void {
-  const state = getOrCreateState();
+  const currentState = state.getOrCreate();
 
-  state.roles = new Set([GENERAL_ROLE]);
-  state.modules.clear();
-  state.snapshot = null;
+  currentState.roles = new Set([constants.GENERAL_ROLE]);
+  currentState.cropper = false;
+  currentState.modules.clear();
+  currentState.snapshot = null;
 }
 
 export function setupInventory() {
@@ -51,8 +52,6 @@ export function setupInventory() {
 
   itemsAll.grantTo(ADMIN_REPORTS).registerActions(ITEM_SUMMARY);
   itemsAll.grantTo(STAFF_REPORTS).registerActions(ITEM_SUMMARY);
-  itemsUpdateOnly.grantTo(ADMIN_REPORTS).registerActions(ITEM_SUMMARY);
-  itemsUpdateOnly.grantTo(STAFF_REPORTS).registerActions(ITEM_SUMMARY);
 
   reports.role('staff').registerActions({ find: { enabled: true, properties: '*' } });
   reports.role('admin').registerActions({ find: { enabled: true, properties: '*' } });

@@ -6,6 +6,7 @@ Framework-agnostic endpoint authorization library: in-memory permission registry
 
 - Bun for development, tests and build.
 - `dist/` (ESM + CJS + `.d.ts`) must run on Node >=20. No Bun APIs in `src/` core; Node APIs only in `src/cli/` and `scripts/`.
+- No runtime dependencies. The CJS bundle is built self-contained (`scripts/build.ts` builds CJS with `packages: 'bundle'`).
 
 ## Commands
 
@@ -19,21 +20,28 @@ bun run build
 ## Layout
 
 - `src/`: one module per responsibility; `src/cli/` is the type generator. Public API composed in `src/index.ts`.
-- `tests/`: `*.test.ts` with `bun test`; `tests/typecheck/` holds type-contract fixtures checked by `tsc`.
+- `src/properties.ts` owns the paths of `data`: it walks the structure, compares each path with the permission and crops them.
+- `tests/`: `*.test.ts` with `bun test`; `tests/typecheck/` holds type-contract fixtures checked by `tsc`; `tests/security.test.ts` holds the adversarial suite.
 - `bin/pkit.mjs`: Node entry that calls the built CLI. `scripts/build.ts`: build pipeline.
 
 ## Conventions
 
 - File names in dash-case. Identifiers camelCase, types PascalCase, constants CONSTANT_CASE.
-- `src/index.ts` keeps named exports for every public piece plus `export default pkit`.
-- Module-level `function` declarations only: no arrow functions, nested functions or parameter defaults (`tests/architecture.test.ts` enforces this).
+- Every `src/` module exposes one `export default`: a single object whose methods are the module's API. No named runtime exports.
+- That object holds only what another file calls. Logic used solely inside the file lives in a non-exported module-level function below the object; a trivial single-use helper is inlined at its call site instead.
+- Export a type or interface only when another file imports it; keep the rest non-exported in the file that uses them.
+- No arrow functions, no parameter defaults, no default bindings (`tests/architecture.test.ts` enforces the export shape and these rules).
+- Blank line between methods and between the logical blocks inside a method.
+- Exceptions to the single default export, listed in `tests/architecture.test.ts`: `src/index.ts` (published named exports plus `export default pkit`), `src/types.ts` (types only) and `src/cli/child.ts` (script).
 - No prose comments in code. Allowed: `@ts-expect-error`, shebang, JSDoc.
 - No new dependencies without justification.
 - Behavior changes require a test.
 
 ## Error contract
 
-`validate()` never throws; it returns `{ result, errors }`. Registration, `seal()` and views throw `PkitError` with `code`.
+`validate()` never throws; it returns `{ result, errors }`, where `result` is `{ data }` on success and `null` on any failure. Registration, `seal()` and views throw `PkitError` with `code`.
+
+`validate()` is the trust boundary: it checks the shape of `data` and `context`, the method, the role and the assigned identifiers. The declared property paths are swept at `registerActions`, so nothing re-validates them per request.
 
 ## Do not
 

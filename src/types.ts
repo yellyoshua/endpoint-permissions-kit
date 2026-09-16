@@ -1,4 +1,4 @@
-import type { ALL_FIELDS, METHODS } from './constants';
+import type constants from './constants';
 
 export interface RoleRegistry {
   general: true;
@@ -6,9 +6,9 @@ export interface RoleRegistry {
 
 export type Role = keyof RoleRegistry & string;
 
-export type Method = (typeof METHODS)[number];
+export type Method = (typeof constants.METHODS)[number];
 
-export type Properties = readonly string[] | typeof ALL_FIELDS;
+export type Properties = readonly string[] | typeof constants.ALL_FIELDS;
 
 export type PermissionId = `${Role}::${string}::${string}`;
 
@@ -30,23 +30,14 @@ export type Data = Record<string, unknown>;
 
 export type Context = Record<string, unknown>;
 
-export interface Authorization {
-  readonly direct: boolean;
-  readonly grantedBy: readonly PermissionId[];
-}
+export type ContextValues = {
+  roles: readonly string[];
+  cropper: boolean;
+};
 
-export interface ResolvedPermission {
-  readonly role: Role;
-  readonly action: string;
-  readonly name: string;
-  readonly permissionId: PermissionId;
-  readonly method: Method;
-  readonly enabled: true;
-  readonly properties: Properties;
-  readonly authorization: Authorization;
-}
+export type ContextKey = keyof ContextValues;
 
-export type HookFn = (data: Data | undefined, context: Context | undefined, permission: ResolvedPermission) => unknown;
+export type HookFn = (data: Data, context: Context, permissions: readonly string[]) => unknown;
 
 export type ValidationError =
   | { readonly code: Exclude<PkitErrorCode, 'PROPERTIES_NOT_ALLOWED'>; readonly message: string }
@@ -54,6 +45,11 @@ export type ValidationError =
   | { readonly code: 'HOOK_ERROR' | 'VALIDATION_ERROR'; readonly message: string; readonly cause: unknown };
 
 export type ValidationErrorCode = ValidationError['code'];
+
+export type PkitError = Error & { name: 'PkitError' } & (
+  | { code: Exclude<PkitErrorCode, 'PROPERTIES_NOT_ALLOWED'> }
+  | { code: 'PROPERTIES_NOT_ALLOWED'; fields: readonly string[] }
+);
 
 export type PkitErrorCode =
   | 'ROLE_NOT_DECLARED'
@@ -65,6 +61,7 @@ export type PkitErrorCode =
   | 'UNKNOWN_ROLE'
   | 'UNKNOWN_ACTION'
   | 'UNKNOWN_PERMISSION'
+  | 'AMBIGUOUS_PERMISSION'
   | 'PERMISSION_ROLE_MISMATCH'
   | 'PERMISSION_NOT_ASSIGNED'
   | 'METHOD_DISABLED'
@@ -75,29 +72,19 @@ export interface UserAssignments {
   permissions: readonly string[];
 }
 
-interface PermissionInput extends UserAssignments {
+export interface ValidateInput extends UserAssignments {
   action: string;
-  name: string;
+  method: Method;
+  data?: Data;
   context?: Context;
 }
 
-export interface FindInput extends PermissionInput {
-  method: 'find';
-  select?: readonly string[];
-  data?: Data;
+export interface ValidateData {
+  readonly data: Data;
 }
 
-export interface WriteInput<RequestData extends Data = Data> extends PermissionInput {
-  method: Exclude<Method, 'find'>;
-  data: RequestData;
-}
-
-export type ValidateInput = FindInput | WriteInput;
-
-export type FindResult = Properties;
-
-export type ValidateResult<Result> =
-  | { readonly result: Result; readonly errors: readonly [] }
+export type ValidateResult =
+  | { readonly result: ValidateData; readonly errors: readonly [] }
   | { readonly result: null; readonly errors: readonly ValidationError[] };
 
 export type PermissionEntry = Readonly<ActionDef>;

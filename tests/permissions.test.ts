@@ -47,10 +47,9 @@ describe('permissions', () => {
 
       expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_REPORTS] })).toEqual({
         [STAFF_ITEMS_ALL]: { ...noAccess, find: true },
-        [STAFF_ITEMS_UPDATE_ONLY]: { ...noAccess, find: true },
         [STAFF_REPORTS]: { ...noAccess, find: true },
       });
-      expect(pkit.permissions.forUser({ role: 'admin', permissions: [ADMIN_REPORTS] })['admin::inventory.items::update-only']).toEqual({ ...noAccess, find: true });
+      expect(pkit.permissions.forUser({ role: 'admin', permissions: [ADMIN_REPORTS] })[ADMIN_ITEMS_ALL]).toEqual({ ...noAccess, find: true });
       expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_ITEMS_UPDATE_ONLY] })).toEqual({
         [STAFF_ITEMS_UPDATE_ONLY]: { ...noAccess, find: true, update: true },
       });

@@ -1,5 +1,5 @@
 import pkit from 'endpoint-permissions-kit';
-import type { Context, Data, PermissionId, ResolvedPermission, Role } from 'endpoint-permissions-kit/types';
+import type { Context, Data, PermissionId, Role } from 'endpoint-permissions-kit/types';
 
 void verifyRoleContracts();
 
@@ -27,28 +27,43 @@ async function verifyRoleContracts(): Promise<void> {
   items.grantTo(reportsId).role('staff');
   items.role('staff').hook('update', inspectHookArguments);
 
-  const identity = { role: 'staff', permissions: ['staff::inventory.reports::all'] } as const;
-  void pkit.validate({ ...identity, action: 'inventory.items', name: 'all', method: 'find', select: ['id'] });
+  const identity = { role: 'staff', permissions: ['staff::inventory.reports::all'], action: 'inventory.items' } as const;
+  void pkit.validate({ ...identity, method: 'find' });
   // @ts-expect-error
-  void pkit.validate({ ...identity, action: 'inventory.items', name: 'all', method: 'update', data: { id: 1 }, select: ['id'] });
+  void pkit.validate({ ...identity, method: 'find', name: 'all' });
+  void pkit.validate({ ...identity, method: 'create', data: { name: 'x' } });
+  void pkit.validate({ ...identity, method: 'remove', data: { id: 1 } });
+  void pkit.validate({ ...identity, method: 'update' });
   // @ts-expect-error
-  void pkit.validate({ ...identity, action: 'inventory.items', name: 'all', method: 'list' });
+  void pkit.validate({ ...identity, method: 'update', select: ['id'] });
   // @ts-expect-error
-  void pkit.validate({ ...identity, action: 'inventory.items', name: 'all', method: 'update' });
+  void pkit.validate({ ...identity, method: 'find', properties: ['id'] });
   // @ts-expect-error
-  void pkit.validate({ action: 'inventory.items', name: 'all', method: 'find', role: 'staff' });
+  void pkit.validate({ ...identity, method: 'list' });
   // @ts-expect-error
-  void pkit.validate({ action: 'inventory.items', name: 'all', method: 'find', permissions: [] });
+  void pkit.validate({ ...identity, method: 'find', data: 'id' });
   // @ts-expect-error
-  void pkit.validate({ ...identity, action: 'inventory.items', method: 'find' });
+  void pkit.validate({ action: 'inventory.items', method: 'find', role: 'staff' });
+  // @ts-expect-error
+  void pkit.validate({ action: 'inventory.items', method: 'find', permissions: [] });
+  // @ts-expect-error
+  void pkit.validate({ ...identity, action: undefined, method: 'find' });
 
-  const validation = await pkit.validate({ ...identity, action: 'inventory.items', name: 'all', method: 'update', data: { id: 1 } });
-  const id: number | undefined = validation.result?.id;
+  const validation = await pkit.validate({ ...identity, method: 'update', data: { id: 1 } });
+  const id: unknown = validation.result?.data.id;
   void id;
   // @ts-expect-error
   if (validation.errors[0]?.code === 'HOOK_ERROR') void validation.errors[0].fields;
 
-  const access = pkit.permissions.forUser(identity);
+  pkit.context.set('cropper', true);
+  // @ts-expect-error
+  pkit.context.set('cropper', 'yes');
+  // @ts-expect-error
+  pkit.context.set('sorter', true);
+  const cropper: boolean = pkit.context.get('cropper');
+  void cropper;
+
+  const access = pkit.permissions.forUser({ role: 'staff', permissions: ['staff::inventory.reports::all'] });
   const canFind: boolean | undefined = access['staff::inventory.items::all']?.find;
   void canFind;
   // @ts-expect-error
@@ -60,8 +75,7 @@ async function verifyRoleContracts(): Promise<void> {
   void catalog['nobody::inventory.items::all'];
 }
 
-function inspectHookArguments(data: Data | undefined, context: Context | undefined, permission: ResolvedPermission): void {
-  const role: Role = permission.role;
-  const grantedBy: readonly PermissionId[] = permission.authorization.grantedBy;
-  void [data, context, role, grantedBy, permission.permissionId, permission.name];
+function inspectHookArguments(data: Data, context: Context, permissions: readonly string[]): void {
+  const first: string | undefined = permissions[0];
+  void [data.id, context.user, first, permissions.length];
 }

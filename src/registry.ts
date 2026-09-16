@@ -1,7 +1,10 @@
+import constants from './constants';
+import definitions from './definitions';
+import errors from './errors';
+import identifiers from './identifiers';
+import state from './state';
+import type { ModuleEntry, NameEntry, State } from './state';
 import type { ActionDefs, GrantDefs, HookFn, Method, PermissionId, Role } from './types';
-import { GLOBAL_HOOK_OWNER, MODULE_SEPARATOR } from './constants';
-import { getOrCreateState, type ModuleEntry, type NameEntry, type State } from './state';
-import { validateActions, validateGrantActions, validateHook, validateModuleName, validatePermissionName, validateRoleSegment } from './validators';
 
 export interface ModuleBuilder {
   module(segment: string): ModuleBuilder;
@@ -29,6 +32,7 @@ interface ModuleScope {
   builder: ModuleBuilder;
 }
 
+/** `role` is `*` on a name-wide scope, which owns the hooks that run for every role. */
 interface NameScope<Builder> {
   action: string;
   name: string;
@@ -43,58 +47,46 @@ interface GrantScope {
   builder: GrantBuilder;
 }
 
-function appendHook(methodHooks: Map<Method, HookFn[]>, method: Method, hook: HookFn): void {
-  const hooks = methodHooks.get(method) ?? [];
+const registry = {
+  defineModule(segment: string): ModuleBuilder {
+    identifiers.checkModuleSegment(segment);
 
-  methodHooks.set(method, hooks);
-  hooks.push(hook);
+    return createModuleBuilder(segment);
+  },
+};
+
+function createModuleBuilder(action: string): ModuleBuilder {
+  const builder = {} as ModuleBuilder;
+  const scope = { action, builder };
+
+  return Object.assign(builder, {
+    module: appendModule.bind(null, action),
+    name: createNameBuilder.bind(null, action),
+    hook: registerModuleHook.bind(null, scope),
+  });
 }
 
-function registerActions(scope: NameScope<RoleBuilder>, actions: ActionDefs): RoleBuilder {
-  const state = getOrCreateState();
-  const registeredActions = validateActions(actions, scope, state);
+function appendModule(parentAction: string, segment: string): ModuleBuilder {
+  identifiers.checkModuleSegment(segment);
 
-  ensureName(state, scope.action, scope.name).actions.set(scope.role, registeredActions);
-
-  return scope.builder;
+  return createModuleBuilder(`${parentAction}${constants.MODULE_SEPARATOR}${segment}`);
 }
 
-function registerGrant(scope: GrantScope, actions: GrantDefs): GrantBuilder {
-  const state = getOrCreateState();
-  const grant = validateGrantActions(actions, scope, state);
+function createNameBuilder(action: string, name: string): NameBuilder {
+  identifiers.checkName(name);
 
-  ensureName(state, scope.action, scope.name).grants.set(scope.permissionId, grant);
+  const builder = {} as NameBuilder;
+  const scope = { action, name, role: constants.GLOBAL_HOOK_OWNER, builder };
 
-  return scope.builder;
-}
-
-function registerModuleHook(scope: ModuleScope, method: Method, hook: HookFn): ModuleBuilder {
-  const state = getOrCreateState();
-
-  validateHook(hook, { action: scope.action, method }, state);
-
-  appendHook(ensureModule(state, scope.action).hooks, method, hook);
-
-  return scope.builder;
-}
-
-function registerNameHook<Builder>(scope: NameScope<Builder>, method: Method, hook: HookFn): Builder {
-  const state = getOrCreateState();
-
-  validateHook(hook, { ...scope, method }, state);
-
-  const nameEntry = ensureName(state, scope.action, scope.name);
-  const roleHooks = nameEntry.hooks.get(scope.role) ?? new Map<Method, HookFn[]>();
-
-  nameEntry.hooks.set(scope.role, roleHooks);
-
-  appendHook(roleHooks, method, hook);
-
-  return scope.builder;
+  return Object.assign(builder, {
+    role: createRoleBuilder.bind(null, action, name),
+    grantTo: createGrantBuilder.bind(null, action, name),
+    hook: (registerNameHook<NameBuilder>).bind(null, scope),
+  });
 }
 
 function createRoleBuilder(action: string, name: string, role: string): RoleBuilder {
-  validateRoleSegment(role);
+  identifiers.checkRole(role);
 
   const builder = {} as RoleBuilder;
   const scope = { action, name, role, builder };
@@ -112,56 +104,110 @@ function createGrantBuilder(action: string, name: string, permissionId: string):
   return Object.assign(builder, { registerActions: registerGrant.bind(null, scope) });
 }
 
-function createNameBuilder(action: string, name: string): NameBuilder {
-  validatePermissionName(name);
+function registerActions(scope: NameScope<RoleBuilder>, actions: ActionDefs): RoleBuilder {
+  const currentState = state.getOrCreate();
 
-  const builder = {} as NameBuilder;
-  const scope = { action, name, role: GLOBAL_HOOK_OWNER, builder };
+  state.requireOpen(currentState);
+  requireDeclaredRole(scope.role, currentState.roles);
 
-  return Object.assign(builder, {
-    role: createRoleBuilder.bind(null, action, name),
-    grantTo: createGrantBuilder.bind(null, action, name),
-    hook: (registerNameHook<NameBuilder>).bind(null, scope),
-  });
+  if (currentState.modules.get(scope.action)?.names.get(scope.name)?.actions.has(scope.role)) {
+    throw errors.create('DUPLICATE_REGISTRATION', `"${scope.action}::${scope.name}" already has actions registered for role "${scope.role}"`);
+  }
+
+  const registeredActions = definitions.readActions(actions, `${scope.action}::${scope.name} [${scope.role}]`);
+
+  ensureName(currentState, scope.action, scope.name).actions.set(scope.role, registeredActions);
+
+  return scope.builder;
 }
 
-function createModuleBuilder(action: string): ModuleBuilder {
-  const builder = {} as ModuleBuilder;
-  const scope = { action, builder };
+function registerGrant(scope: GrantScope, actions: GrantDefs): GrantBuilder {
+  const currentState = state.getOrCreate();
 
-  return Object.assign(builder, {
-    module: appendModule.bind(null, action),
-    name: createNameBuilder.bind(null, action),
-    hook: registerModuleHook.bind(null, scope),
-  });
+  state.requireOpen(currentState);
+
+  // The referenced permission need not exist yet: seal() checks it, so grants may
+  // be registered before the module they enable has been imported.
+  const source = identifiers.parse(scope.permissionId, 'INVALID_DEFINITION',
+    `"${scope.action}::${scope.name}": invalid grantTo identifier`,
+  );
+
+  requireDeclaredRole(source.role, currentState.roles);
+
+  if (source.action === scope.action && source.name === scope.name) {
+    throw errors.create('INVALID_DEFINITION', `"${scope.permissionId}" cannot grant to itself`);
+  }
+
+  if (currentState.modules.get(scope.action)?.names.get(scope.name)?.grants.has(scope.permissionId)) {
+    throw errors.create('DUPLICATE_REGISTRATION', `"${scope.action}::${scope.name}" already has a grant for "${scope.permissionId}"`);
+  }
+
+  const grantActions = definitions.readGrant(actions, `${scope.action}::${scope.name} [grantTo ${scope.permissionId}]`);
+
+  ensureName(currentState, scope.action, scope.name).grants.set(scope.permissionId, { source, actions: grantActions });
+
+  return scope.builder;
 }
 
-function appendModule(parentAction: string, segment: string): ModuleBuilder {
-  validateModuleName(segment);
+function registerModuleHook(scope: ModuleScope, method: Method, hook: HookFn): ModuleBuilder {
+  const currentState = state.getOrCreate();
 
-  return createModuleBuilder(`${parentAction}${MODULE_SEPARATOR}${segment}`);
+  state.requireOpen(currentState);
+  checkHook(hook, method, scope.action);
+
+  appendHook(ensureModule(currentState, scope.action).hooks, method, hook);
+
+  return scope.builder;
 }
 
-export function defineModule(segment: string): ModuleBuilder {
-  validateModuleName(segment);
+function registerNameHook<Builder>(scope: NameScope<Builder>, method: Method, hook: HookFn): Builder {
+  const currentState = state.getOrCreate();
 
-  return createModuleBuilder(segment);
+  state.requireOpen(currentState);
+
+  if (scope.role !== constants.GLOBAL_HOOK_OWNER) requireDeclaredRole(scope.role, currentState.roles);
+
+  checkHook(hook, method, `${scope.action}::${scope.name}`);
+
+  const nameEntry = ensureName(currentState, scope.action, scope.name);
+  const roleHooks = nameEntry.hooks.get(scope.role) ?? new Map<Method, HookFn[]>();
+
+  nameEntry.hooks.set(scope.role, roleHooks);
+
+  appendHook(roleHooks, method, hook);
+
+  return scope.builder;
 }
 
-function ensureModule(state: State, action: string): ModuleEntry {
-  const registeredModule = state.modules.get(action);
+function checkHook(hook: unknown, method: Method, permissionPath: string): void {
+  definitions.checkMethod(method, 'INVALID_DEFINITION', permissionPath);
+
+  if (typeof hook !== 'function') throw errors.create('INVALID_DEFINITION', `${permissionPath}: hook("${method}") expects a function`);
+}
+
+function requireDeclaredRole(role: string, roles: ReadonlySet<string>): void {
+  if (roles.has(role)) return;
+
+  throw errors.create('ROLE_NOT_DECLARED',
+    `role "${role}" is not declared. Available roles: ${[...roles].join(', ')}.\n` +
+    "Is pkit.context.set('roles', [...]) missing from pkit.config.js, or was it imported after this file?",
+  );
+}
+
+function ensureModule(currentState: State, action: string): ModuleEntry {
+  const registeredModule = currentState.modules.get(action);
 
   if (registeredModule) return registeredModule;
 
   const newModule: ModuleEntry = { names: new Map(), hooks: new Map() };
 
-  state.modules.set(action, newModule);
+  currentState.modules.set(action, newModule);
 
   return newModule;
 }
 
-function ensureName(state: State, action: string, name: string): NameEntry {
-  const registeredModule = ensureModule(state, action);
+function ensureName(currentState: State, action: string, name: string): NameEntry {
+  const registeredModule = ensureModule(currentState, action);
   const registeredName = registeredModule.names.get(name);
 
   if (registeredName) return registeredName;
@@ -172,3 +218,12 @@ function ensureName(state: State, action: string, name: string): NameEntry {
 
   return newName;
 }
+
+function appendHook(methodHooks: Map<Method, HookFn[]>, method: Method, hook: HookFn): void {
+  const hooks = methodHooks.get(method) ?? [];
+
+  methodHooks.set(method, hooks);
+  hooks.push(hook);
+}
+
+export default registry;

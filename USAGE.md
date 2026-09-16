@@ -12,7 +12,9 @@ staff::marketing.portals::update-only
 admin::marketing.dashboard::all
 ```
 
-The module identifies the resource. The name distinguishes sets of actions on that resource. The role identifies the variant of the set. The methods (`find`, `update`, `create`, `remove`) and their properties are declared with `registerActions`.
+The module identifies the resource. The name distinguishes sets of actions on that resource. The role identifies the variant of the set. The methods (`find`, `update`, `create`, `remove`) and their properties are declared with `registerActions`. A property is a path: `'id'`, `'unicorn.name'`, `'unicorn.*'`, or `'*'` for every field.
+
+A request never carries the name. It carries `role`, `action` and `method`, and the name is resolved from the assignments of that user: among the identifiers that start with `role::module::`, the one the user holds. This is what lets the same role hold `all`, `read-only` or `only-related` on the same module without the route knowing which variant the caller was given. One user cannot hold two names of the same `role::module`: that is `AMBIGUOUS_PERMISSION` and it denies the request.
 
 The library separates three concepts:
 
@@ -34,6 +36,7 @@ The configuration must be evaluated before the permission modules. A separate mo
 import pkit from 'endpoint-permissions-kit';
 
 pkit.context.set('roles', ['admin', 'staff', 'public']);
+pkit.context.set('cropper', false);
 ```
 
 `modules/marketing/portals/permissions.js`:
@@ -71,16 +74,16 @@ portalsUpdateOnly.grantTo('staff::marketing.dashboard::all').registerActions({
   find: { enabled: true, properties: ['id', 'name', 'assetId'] },
 });
 
-function checkPublishedPortal(_data, context) {
-  if (context.resource.status === 'published') {
+function checkPublishedPortal(data, context) {
+  if (data.status === 'published') {
     throw new Error('Published portals cannot be removed');
   }
 }
 
 portals.hook('remove', checkPublishedPortal);
 
-function checkPortalOwner(_data, context) {
-  if (context.resource.owner !== context.user.id) {
+function checkPortalOwner(data, context) {
+  if (context.owner !== context.user.id) {
     throw new Error('Only the owner can update this portal');
   }
 }
@@ -128,6 +131,17 @@ A name exists only when some role registers actions on it. `.name(...)` builds a
 The role is always explicit. `registerActions` and role hooks require `.role(x)`; `validate` and `permissions.forUser` require `role`. A role outside the catalog produces `ROLE_NOT_DECLARED` when registering and `UNKNOWN_ROLE` when validating.
 
 `*` is reserved for global hooks: declaring it in `context.set` or using it as a permission name throws `INVALID_DEFINITION`.
+
+## Context keys
+
+`context.set(key, value)` accepts two keys and `context.get(key)` reads them back. Both are frozen by `seal()`: setting them afterwards throws `SEALED`.
+
+| Key | Value | Default | Effect |
+| --- | --- | --- | --- |
+| `roles` | `string[]` | `['general']` | The role catalog, declared before the first registration |
+| `cropper` | `boolean` | `false` | How `validate()` compares the keys of `data` with the permission |
+
+With `cropper: false` a path of `data` outside the permission denies the request with `PROPERTIES_NOT_ALLOWED`. With `cropper: true` nothing is denied: `result.data` keeps only the allowed paths. A non-boolean value throws `INVALID_DEFINITION`.
 
 ## Identifiers and assignments
 
@@ -178,57 +192,87 @@ At registration time the identifier format, its role, self-reference, the block 
 
 ## Validating a request
 
-The server obtains `role` and `permissions` from the session and from the loaded assignments. It never accepts them from the body or the query string. The route fixes the module, name and method it protects.
+The server obtains `role` and `permissions` from the session and from the loaded assignments. It never accepts them from the body or the query string. The route fixes the module and the method it protects; the name comes from the assignments.
 
 ```js
 const validation = await pkit.validate({
   action: 'marketing.portals',
-  name: 'all',
   method: 'find',
   role: 'staff',
   permissions: ['staff::marketing.dashboard::all'],
-  select: ['id', 'name', 'assetId', 'internalNotes'],
+  data: {
+    id: 1,
+    name: 'Landing',
+    assetId: 'a-7',
+  },
   context: {
     user: { id: 7 },
-    resource: { id: 1, owner: 7 },
   },
 });
 ```
 
-With the example configuration the result is `['id', 'name', 'assetId']`. An empty `errors` indicates success. If a phase fails, `result` is `null`.
+The shape is the same for the four methods: `data` carries the fields of that method and `context` carries whatever the hooks need. With the example configuration the result is `{ data }`, the same object that was sent. Adding `internalNotes` to `data` returns `result: null` and one `PROPERTIES_NOT_ALLOWED` error. An empty `errors` indicates success. If a phase fails, `result` is `null`.
 
-`action`, `name`, `role` and `permissions` are required; omitting any of them is `INVALID_INPUT`. There is no implicit role: the anonymous case sends `role: 'public'` and the fixed list of identifiers the server decides for that identity.
+`action`, `role` and `permissions` are required; omitting any of them is `INVALID_INPUT`. The request does not accept `name`. There is no implicit role: the anonymous case sends `role: 'public'` and the fixed list of identifiers the server decides for that identity.
 
-The assignment list is validated in full, in this order per identifier: format (`INVALID_INPUT`), role equal to the authenticated one (`PERMISSION_ROLE_MISMATCH`) and existence as assignable (`UNKNOWN_PERMISSION`). Any failure denies the whole request, even if the target does not depend on the faulty row: a stale row in the database blocks the user until it is cleaned up. An empty list denies with `PERMISSION_NOT_ASSIGNED`. Duplicates are deduplicated.
+The assignment list is validated in full, in this order per identifier: format (`INVALID_INPUT`), role equal to the authenticated one (`PERMISSION_ROLE_MISMATCH`), existence as assignable (`UNKNOWN_PERMISSION`) and a single name per `role::module` (`AMBIGUOUS_PERMISSION`). Any failure denies the whole request, even if the target does not depend on the faulty row: a stale row in the database blocks the user until it is cleaned up. An empty list denies with `PERMISSION_NOT_ASSIGNED`. Repeated identical identifiers are deduplicated.
 
-Evaluation order: sealed registry, input shape, role, assignments, module (`UNKNOWN_ACTION`), name (`UNKNOWN_PERMISSION`), access resolution, data or selection, and hooks.
+Evaluation order: sealed registry, input shape, role, assignments (`AMBIGUOUS_PERMISSION`), module (`UNKNOWN_ACTION`), name resolution, access resolution, data properties, and hooks.
 
-Resolution of `(role, module, name, method)`:
+Resolution of `(role, module, method)`:
 
-1. If `role::module::name` is in the user's list, the direct definition decides completely. A missing method or `enabled: false` is `METHOD_DISABLED`. Grants towards that target are ignored, even if they were wider.
-2. If it is not directly assigned, the `grantTo` blocks of the target whose enabling identifier is in the list are collected. None: `PERMISSION_NOT_ASSIGNED`. None with that method: `METHOD_DISABLED`. The fields are the union of the blocks that declare the method.
+1. The name is looked up by prefix. The prefix is `role::module::`, built from the request with the separator at the end, and the assignment of the user that starts with it decides which name the request is about. The final separator is part of the prefix: `staff::marketing.portals::` never matches `staff::marketing.portals.assets::all`, which is a submodule, nor `staff::marketing.portal::all`, which is an unrelated module whose name is a textual prefix of this one.
+2. With that name assigned, the direct definition decides completely. A missing method or `enabled: false` is `METHOD_DISABLED`. Grants towards that target are ignored, even if they were wider.
+3. Without an assignment under the prefix, the names of the module whose `grantTo` blocks have an enabling identifier in the list are collected. None: `PERMISSION_NOT_ASSIGNED`. More than one: `AMBIGUOUS_PERMISSION`. Exactly one: its blocks decide. None with that method: `METHOD_DISABLED`. The fields are the union of the blocks that declare the method.
 
 A direct definition the user does not hold does not participate: it neither contributes fields nor denies. The administrator who only holds dashboard receives the three fields of the grant, even though `portalsAll.role('admin')` declares `'*'`. The state of the source's methods does not matter either: disabling `dashboard.find` does not remove the derived access; removing the assignment does.
 
-Different names are not merged: holding `all` does not grant `update-only`.
+Different names are not merged: holding `all` does not grant `update-only`. That matters more now that the name is resolved instead of requested: the variant the user holds is the whole of their access to that module, and the library never falls back to a wider or a narrower sibling. When the choice is not unique it denies with `AMBIGUOUS_PERMISSION` instead of picking one.
 
-For `find`, `result` is the effective selection: the requested fields are trimmed to the allowed ones and omitting `select` returns all of them. With `'*'`, `result` is `select` or `'*'`. The library does not query the database and does not filter responses; the handler uses that selection.
+The keys of `data` are the fields the request touches, and they are compared with the effective fields of the permission the same way for the four methods. `src/properties.ts` walks the structure and builds the path as it descends, so `{ unicorn: { name: 'Rainbow Dash', treasures: ['sparkles'] } }` is compared as `unicorn.name` and `unicorn.treasures`. An empty `data` passes, and so does a permission declared with `'*'`.
 
-In `update`, `create` and `remove`, any key of `data` outside the effective fields produces `PROPERTIES_NOT_ALLOWED` with the `fields` list. On success the same `data` object is returned. `select` outside `find` produces `INVALID_INPUT`. `data` is required for writes and optional in `find`; `context` is optional. `data`, `context` and `select` must have the correct shape even when the properties are `'*'`; omitted values reach the hooks as `undefined`.
+Matching is per path and per segment:
+
+| Declared property | Matches | Does not match |
+| --- | --- | --- |
+| `'id'` | `id` | `id.value` |
+| `'unicorn'` | `unicorn` when it arrives as `{}` or `[]` | `unicorn.name` |
+| `'unicorn.name'` | `unicorn.name` | `unicorn.color`, `unicorn.name.first` |
+| `'unicorn.*'` | `unicorn.name`, `unicorn.color`, `unicorn.treasures` when it arrives as `{}` or `[]` | `unicorn.treasures.id` |
+| `'unicorn.*.*'` | `unicorn.treasures.id` | `unicorn.name` |
+
+A literal path is the exact leaf, never a prefix: allowing `unicorn` does not allow what hangs below it. Each `*` stands for exactly one segment, and it can never be the first one: a path that starts with a wildcard would grant that leaf under every root key, so `'*.name'` and `'*.*'` throw `INVALID_DEFINITION`. `'*'` on its own is not a path either: it is the wildcard of the whole `properties` value and cannot appear inside the list.
+
+Values the library does not walk, such as `Date` instances or class instances, are a single leaf path: they are allowed or denied whole, and the crop keeps them by reference.
+
+Array elements share the path of the array that holds them, at every depth, so indexes never appear in a path: `unicorn.treasures[0].id` and `unicorn.treasures[1].id` are both compared as `unicorn.treasures.id`, a scalar array such as `tags: ['a', 'b']` is compared as `tags`, and `matrix: [[1, 2]]` as `matrix`. An index in `registerActions` (`'treasures[0]'`) throws `INVALID_DEFINITION`, and so do an empty segment (`'unicorn..name'`) and a leading wildcard (`'*.name'`).
+
+Only a real array collapses that way. A key of an object is always a segment, even when it reads like an index, so `{ treasures: { '0': { id: 1 } } }` is compared as `treasures.0.id` and does not satisfy `'treasures.id'`. No key is exempt from the comparison either: `constructor`, `prototype` and `__proto__` arrive from `JSON.parse` as ordinary own keys and are denied or cropped like any other field.
+
+The two modes run different algorithms:
+
+- `cropper: false` compares the index-free paths. Every path outside the permission denies the request with `PROPERTIES_NOT_ALLOWED`; `fields` lists those paths without indexes and without repeating one that several array elements produce.
+- `cropper: true` never denies. It copies out the allowed part of `data`, compacts the arrays it punctured and prunes the objects and arrays the crop emptied. A container that arrived empty and is allowed stays. The hooks receive that cropped object; the `data` you passed is never mutated.
+
+Both modes walk `data` once. A node already open above the one being visited closes a cycle: with `cropper: false` it is reported as a leaf at that path, so `payload.escalation.loop = payload.escalation` denies with `fields: ['escalation.loop']`; with `cropper: true` a cycle cannot be represented in a filtered copy, so the request fails with `VALIDATION_ERROR` instead of copying the node by reference. `data` nested deeper than 1000 levels fails with `VALIDATION_ERROR` in both modes.
+
+`data` and `context` are optional and are replaced by `{}` once, at the start of `validate()`; from there every layer and every hook receives an object. Sending `null`, a string or any other shape for them is `INVALID_INPUT`. `role`, `action` and `permissions` have no default and are always required.
+
+The library does not query the database and does not filter responses; the handler uses the fields it authorized.
 
 With the definitions of the example:
 
-| User role and assignments | Target | Result before hooks |
+| User role and assignments | Target | Effective fields |
 | --- | --- | --- |
-| `admin`, dashboard only | Portals `all`, `find` | `id`, `name`, `assetId`; the wildcard of `portalsAll.role('admin')` does not participate |
-| `admin`, dashboard and portals `all` | Portals `all`, `find` | `'*'`: the direct assignment rules |
-| `staff`, dashboard only | Portals `all`, `find` | The three fields of the grant; the hooks of `portalsAll.role('staff')` run |
-| `staff`, dashboard and portals `all` | Portals `all`, `find` | Fields of `portalsAll.role('staff')`, even if fewer than the grant's |
-| `admin`, dashboard only | Portals `update-only`, `find` | `id`, `name`, `assetId`; does not require `portalsUpdateOnly.role('admin')` |
-| `staff`, dashboard only | Portals `update-only`, `update` | `METHOD_DISABLED`: the grant only grants `find` |
-| `staff`, portals `update-only` | Portals `update-only`, `update` | Allowed with its three fields |
-| `staff`, portals `all` | Portals `update-only`, `find` | `PERMISSION_NOT_ASSIGNED` |
-| `admin`, no assignments | Portals `all`, `find` | `PERMISSION_NOT_ASSIGNED` |
+| `admin`, dashboard only | Portals, `find` | `id`, `name`, `assetId` of the grant to `all`; the wildcard of `portalsAll.role('admin')` does not participate |
+| `admin`, dashboard and portals `all` | Portals, `find` | `'*'`: the direct assignment rules, every requested field passes |
+| `staff`, dashboard only | Portals, `find` | The three fields of the grant; the hooks of `portalsAll.role('staff')` run |
+| `staff`, dashboard and portals `all` | Portals, `find` | Fields of `portalsAll.role('staff')`, even if fewer than the grant's |
+| `staff`, dashboard only | Portals, `update` | `METHOD_DISABLED`: the grant only grants `find` |
+| `staff`, portals `update-only` | Portals, `update` | Allowed with the three fields of `portalsUpdateOnly.role('staff')` |
+| `staff`, portals `all` | Portals, `update` | Fields of `portalsAll.role('staff')`: `update-only` does not participate |
+| `admin`, no assignments | Portals, `find` | `PERMISSION_NOT_ASSIGNED` |
+| `staff`, portals `all` and `update-only` | Portals, any | `AMBIGUOUS_PERMISSION` |
 | `staff`, row with `admin` prefix | Any | `PERMISSION_ROLE_MISMATCH` |
 | `staff`, row whose name no longer exists | Any | `UNKNOWN_PERMISSION` |
 
@@ -248,21 +292,22 @@ A role hook is valid at seal time if some path exists for that role, name and me
 
 Order: module hooks, name hooks and name hooks for the authenticated role. All of them run with `Promise.allSettled`; errors keep the group and registration order even if they finish in another order. Each registration runs once per request. One failure denies the whole operation. Return values are ignored.
 
-The third argument contains the resolved permission:
+Every hook receives the same three arguments, whatever the method:
 
 ```text
-role, action, name, permissionId, method, enabled, properties,
-authorization: { direct: boolean, grantedBy: readonly PermissionId[] }
+(data, context, permissions)
 ```
 
-`permissionId` is the effective target, even if it is not assignable. `direct` indicates whether the access comes from the direct assignment; `grantedBy` lists, sorted and frozen, the identifiers whose grants contributed fields. `direct: true` implies `grantedBy: []`.
+`data` is the request payload, already cropped when `cropper` is on. `context` is the bag the caller passed to `validate()`; the library never reads it. `permissions` is the list of identifiers of the user making the request, exactly as it arrived; the library does not resolve it for the hook. `data` and `context` are always objects and `permissions` is always an array.
+
+With `cropper: true` a hook only reads the paths the permission allows: anything else was already removed from `data`. A check on a value the request does not send, such as the current owner of the row, belongs in `context`, computed by the server for that request.
 
 ```js
 portalsAll.role('staff').hook('find', checkDashboardPortalAccess);
 
-function checkDashboardPortalAccess(_data, context, permission) {
-  if (!permission.authorization.grantedBy.includes('staff::marketing.dashboard::all')) return;
-  if (!context || context.allowDashboardPortalAccess !== true) {
+function checkDashboardPortalAccess(data, context, permissions) {
+  if (!permissions.includes('staff::marketing.dashboard::all')) return;
+  if (data.allowDashboardPortalAccess !== true) {
     throw new Error('Portal access from dashboard is not allowed');
   }
 }
@@ -276,25 +321,26 @@ The configuration, registration, sealing and view methods throw `PkitError` exce
 
 | Code | Information |
 | --- | --- |
-| `INVALID_DEFINITION` | Malformed segment, name or identifier; grant with `enabled: false`, `'*'`, self-reference or missing reference; name without actions; role hook without a path |
+| `INVALID_DEFINITION` | Malformed segment, name, identifier or property path; grant with `enabled: false`, `'*'`, self-reference or missing reference; name without actions; role hook without a path |
 | `DUPLICATE_REGISTRATION` | Second `registerActions` for `(role, module, name)` or second block for the same grant |
 | `ROLE_NOT_DECLARED` | Role outside the catalog when registering, including the `grantTo` prefix |
 | `SEALED` / `NOT_SEALED` | Registration after `seal()` / use before `seal()` |
-| `INVALID_INPUT` | Request without `action`, `name`, `role` or `permissions`; malformed identifier; `data`, `context` or `select` with an invalid shape |
+| `INVALID_INPUT` | Request without `action`, `role` or `permissions`; malformed identifier; `data` or `context` with an invalid shape |
 | `UNKNOWN_ROLE` / `UNKNOWN_ACTION` | Unknown role or module at runtime |
-| `UNKNOWN_PERMISSION` | Missing name, or an assigned identifier that is not assignable |
+| `UNKNOWN_PERMISSION` | An assigned identifier that is not assignable |
+| `AMBIGUOUS_PERMISSION` | Two names of the same `role::module` assigned, or two names of one module reached by grant: the request names none, so it cannot choose |
 | `PERMISSION_ROLE_MISMATCH` | Assigned identifier of a role different from the authenticated one |
-| `PERMISSION_NOT_ASSIGNED` | Target without direct assignment and without an active grant |
+| `PERMISSION_NOT_ASSIGNED` | Module without an assignment under its prefix and without an active grant |
 | `METHOD_DISABLED` | Assigned target without that method enabled, or grants that do not grant that method |
-| `PROPERTIES_NOT_ALLOWED` | `fields` enumerates the rejected keys |
+| `PROPERTIES_NOT_ALLOWED` | `fields` enumerates the index-free paths of `data` outside the permission; never raised with `cropper: true` |
 | `HOOK_ERROR` | `cause` keeps what the hook threw |
-| `VALIDATION_ERROR` | Unexpected failure, with its original `cause` |
+| `VALIDATION_ERROR` | Unexpected failure, with its original `cause`; also `data` nested deeper than 1000 levels, or a cycle in `data` with `cropper` on |
 
 Flow:
 
 ```text
 config → context.set → registerActions / hook → seal
-request → validate → sealed → compatible select → role → action → method → data/fields → hooks
+request → validate → sealed → input shape → role → action → method → data properties → hooks
 ```
 
 `validate()` catches the exceptions of its phases and returns a single contract. It never turns a failure into a successful result. Per failure, `validate` responds:
@@ -302,15 +348,16 @@ request → validate → sealed → compatible select → role → action → me
 | Failure | `validate` response |
 | --- | --- |
 | Open registry | `NOT_SEALED` |
-| `select` outside `find`, or invalid shape of data/context/select | `INVALID_INPUT` |
+| Invalid shape of `data` or `context` | `INVALID_INPUT` |
 | Role outside the catalog | `UNKNOWN_ROLE` |
 | Module not registered | `UNKNOWN_ACTION` |
 | Method missing or disabled | `METHOD_DISABLED` |
-| Keys not allowed on a write | `PROPERTIES_NOT_ALLOWED`, with `fields` |
+| Paths of `data` outside the permission, with `cropper: false` | `PROPERTIES_NOT_ALLOWED`, with `fields` |
 | One or more hooks fail | One `HOOK_ERROR` per failed hook, with `cause` |
 | Unexpected exception from another phase | `VALIDATION_ERROR`, stable message and original `cause` |
+| `data` too deep to walk, or cyclic with `cropper` on | `VALIDATION_ERROR`, with the `RangeError` as `cause` |
 
-Every failure produces `result: null`. Success produces an effective selection for `find` or the same `data` object for writes. The `errors` arrays are frozen. Hooks keep their message and cause; the consumer decides what to expose and what to log.
+Every failure produces `result: null`. Success produces `{ data }`: the same `data` object, or a copy with the allowed keys when `cropper` is on. The `errors` arrays are frozen. Hooks keep their message and cause; the consumer decides what to expose and what to log.
 
 ## Permission views
 
@@ -347,10 +394,10 @@ The generator imports the config in an isolated process and augments `RoleRegist
 
 ## Functional implementation
 
-The library's functions are declared with `function` at module scope. There are no arrow functions, nested functions or parameter defaults. Builders bind arguments with `bind` and keep their identity when chaining calls or extracting methods. Definitions are copied and frozen at registration; views are materialized once at seal time. `src/validators.ts` concentrates the validation rules and receives explicit state; `src/resolve.ts` contains the resolution shared by `validate` and `forUser`. The README "Project layout" section describes the responsibility of every file.
+The library's functions are declared with `function` at module scope. There are no arrow functions, nested functions or parameter defaults. Builders bind arguments with `bind` and keep their identity when chaining calls or extracting methods. Definitions are copied and frozen at registration; views are materialized once at seal time. Each input is checked by the API that receives it: `src/context.ts`, `src/registry.ts`, `src/validate.ts` and `src/permissions.ts` own their own boundaries, and the rules they share live in `src/identifiers.ts` (the identifier format), `src/definitions.ts` (the `registerActions` literal) and `src/state.ts` (the open/sealed lifecycle). `src/resolve.ts` contains the identity check and the resolution shared by `validate` and `forUser`; `src/properties.ts` owns the comparison and the cropping of the paths of `data`, with one algorithm per mode. The README "Project layout" section describes the responsibility of every file.
 
 ## Scope
 
-The library does not provide framework adapters, does not access databases, does not discover routes in the filesystem, does not manage sessions and does not hot-reload the sealed registry. The application keeps those responsibilities: it calls `validate()` from its handlers, loads assignments from a trusted source, decides which module, name and method each route protects, authenticates users, and restarts the process after changing sealed registrations.
+The library does not provide framework adapters, does not access databases, does not discover routes in the filesystem, does not manage sessions and does not hot-reload the sealed registry. The application keeps those responsibilities: it calls `validate()` from its handlers, loads assignments from a trusted source, decides which module and method each route protects, authenticates users, and restarts the process after changing sealed registrations.
 
 The registry state lives in `globalThis[Symbol.for('endpoint-permissions-kit')]`. The ESM and CJS copies of the package share that state within one process, so a config loaded through `import` and a module loaded through `require` register into the same catalog.
