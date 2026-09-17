@@ -1,7 +1,7 @@
 {
   "name": "endpoint-permissions-kit",
-  "version": "0.2.1",
-  "description": "Framework-agnostic endpoint permissions with an in-memory registry, typed roles and validation hooks",
+  "version": "0.3.0",
+  "description": "Framework-agnostic endpoint permissions: an instance you create, typed roles and validation hooks",
   "license": "Apache-2.0",
   "author": "yellyoshua",
   "repository": {
@@ -42,12 +42,8 @@
     },
     "./package.json": "./package.json"
   },
-  "bin": {
-    "pkit": "./bin/pkit.mjs"
-  },
   "files": [
-    "dist",
-    "bin"
+    "dist"
   ],
   "engines": {
     "node": ">=20"

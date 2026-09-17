@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-16
+
+### Removed
+
+- The `pkit generate` CLI and the `pkit` binary (`bin/pkit.mjs`, `src/cli/`).
+- `seal()` and the `SEALED` and `NOT_SEALED` error codes.
+- `RoleRegistry` from `endpoint-permissions-kit/types` and the augmentation through a generated declaration file.
+- The registry state on `globalThis[Symbol.for('endpoint-permissions-kit')]`.
+- The prebuilt `pkit` default export and the named exports `seal`, `validate`, `context`, `permissions` and `module`.
+
+### Changed
+
+- **Breaking.** The library exports the `Pkit` class (`export default Pkit` and `export { Pkit }`). The consumer creates an instance with `new Pkit({ roles, cropper, reservedFields })`, exports it and imports it in every permission file and handler. Two instances never share state.
+- **Breaking.** Roles are typed by the constructor generic: `new Pkit({ roles: ['admin', 'staff'] })` is `Pkit<'admin' | 'staff'>`. `Role<R>`, `PermissionId<R>`, `ValidateInput<R>`, `UserAssignments<R>`, `NamedPermissionCatalog<R>` and `UserPermissionMap<R>` take the same generic and default to `string`.
+- **Breaking.** The checks `seal()` used to run (grant source exists as assignable, name without actions, grant method not declared by the receiving name, role hook without a path, module hooks without names) run lazily on the first `validate()`, `permissions.named` or `permissions.forUser` after the last registration and are memoized until the next one. `validate()` reports them as `VALIDATION_ERROR` with the message `registry has invalid definitions` and the `INVALID_DEFINITION` `PkitError` as `cause`; the views throw that `PkitError`.
+- `context.set` is allowed at any time; every registration or context change invalidates the internal snapshot, so registering after a `validate()` is valid.
+- Builders are cached by key and their public methods are bound in the constructor: chaining returns the same object and extracted methods keep working.
+
+### Migration
+
+1. Create a central `pkit.ts` that exports the instance: `export const pkit = new Pkit({ roles: ['admin', 'staff'] })`, and import the permission files from a file that re-exports it.
+2. Replace `import pkit from 'endpoint-permissions-kit'` in permission files and handlers with an import of that instance.
+3. Delete every `pkit.seal()` call; optionally read `pkit.permissions.named` at startup to surface invalid registrations early. Import every permission file, hooks included, before serving requests: without `seal()`, a `validate()` that runs before a hook is registered succeeds without that hook.
+4. Delete `pkit.generated.d.ts`, the `pkit generate` script and `pkit.config.*`.
+5. Replace `import type { Role } from 'endpoint-permissions-kit/types'` with `PermissionId<R>` and `Role<R>`, where `R` is the role union of the instance (`typeof pkit extends Pkit<infer R> ? R : never`).
+
 ## [0.2.1] - 2026-09-16
 
 ### Added
@@ -51,6 +77,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `pkit generate` CLI with `--config`, `--out` and `--check`, generating a `RoleRegistry` augmentation for `endpoint-permissions-kit/types`.
 - ESM, CommonJS and TypeScript declaration output; `endpoint-permissions-kit/types` subpath; Node 20 or newer.
 
+[0.3.0]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.3.0
 [0.2.1]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.2.1
 [0.2.0]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.2.0
 [0.1.0]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.1.0

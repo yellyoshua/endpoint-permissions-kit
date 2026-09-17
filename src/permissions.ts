@@ -1,37 +1,55 @@
-import resolve from './resolve';
-import state from './state';
+import type { Snapshot } from './registry';
+import type { Identity, ResolvedName } from './resolve';
 import type { MethodAccessMap, NamedPermissionCatalog, UserAssignments, UserPermissionMap } from './types';
+import constants from './constants';
+import errors from './errors';
+import identifiers from './identifiers';
+import resolve from './resolve';
 
-const permissions = Object.freeze({
-  /**
-   * The effective access of one identity, with the same precedence and identity
-   * checks as `validate()` but without running hooks. It resolves one name per
-   * module, the same one `validate()` resolves; modules out of reach are omitted.
-   */
-  forUser(assignments: UserAssignments): UserPermissionMap {
-    const currentState = state.getOrCreate();
-    const snapshot = state.requireSnapshot(currentState);
-    const identity = resolve.identity(assignments, snapshot, currentState.roles);
+const permissions = {
+  named(snapshot: Snapshot): NamedPermissionCatalog {
+    return snapshot.named;
+  },
 
+  forUser(snapshot: Snapshot, assignments: UserAssignments): UserPermissionMap {
+    if (assignments === null || typeof assignments !== 'object') throw errors.create('INVALID_INPUT', 'assignments must be an object');
+
+    const { role } = assignments;
+    const identity = resolve.checkIdentity(snapshot, role, assignments.permissions);
     const access: Record<string, MethodAccessMap> = Object.create(null);
 
-    for (const [action, registeredModule] of currentState.modules) {
-      const chosen = resolve.permission(registeredModule, action, identity);
+    for (const modulePath of snapshot.modules.keys()) {
+      const resolved = resolve.resolveName(snapshot, role, modulePath, identity);
 
-      if (!chosen) continue;
-
-      const methodAccess = resolve.methodAccess(chosen.entry, chosen.permissionId, identity.role, identity.assigned);
-
-      if (methodAccess) access[chosen.permissionId] = methodAccess;
+      if (resolved !== null) access[identifiers.build(role, modulePath, resolved.name)] = methodAccess(resolved, role, identity);
     }
 
     return Object.freeze(access) as UserPermissionMap;
   },
-
-  /** The assignable identifiers with their registered actions; grants are not listed. */
-  get named(): NamedPermissionCatalog {
-    return state.requireSnapshot(state.getOrCreate()).named;
-  },
-});
+};
 
 export default permissions;
+
+function methodAccess(resolved: ResolvedName, role: string, identity: Identity): MethodAccessMap {
+  const enabled = new Set<string>();
+
+  if (resolved.direct) {
+    const actions = resolved.entry.actions.get(role);
+
+    for (const method of constants.METHODS) {
+      if (actions?.[method]?.enabled === true) enabled.add(method);
+    }
+  } else {
+    for (const [sourceId, grant] of resolved.entry.grants) {
+      if (!identity.assigned.has(sourceId)) continue;
+
+      for (const method of Object.keys(grant.actions)) enabled.add(method);
+    }
+  }
+
+  const map: Record<string, boolean> = Object.create(null);
+
+  for (const method of constants.METHODS) map[method] = enabled.has(method);
+
+  return Object.freeze(map) as MethodAccessMap;
+}

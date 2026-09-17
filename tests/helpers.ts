@@ -1,6 +1,4 @@
-import pkit from '../src/index';
-import constants from '../src/constants';
-import state from '../src/state';
+import Pkit from '../src/index';
 
 export const STAFF_REPORTS = 'staff::inventory.reports::all';
 export const ADMIN_REPORTS = 'admin::inventory.reports::all';
@@ -10,20 +8,8 @@ export const STAFF_ITEMS_UPDATE_ONLY = 'staff::inventory.items::update-only';
 
 const ITEM_SUMMARY = { find: { enabled: true, properties: ['id', 'name', 'assetId'] } } as const;
 
-export function resetState(): void {
-  const currentState = state.getOrCreate();
-
-  currentState.roles = new Set([constants.GENERAL_ROLE]);
-  currentState.cropper = false;
-  currentState.reservedFields = [];
-  currentState.snapshot = null;
-
-  currentState.modules.clear();
-}
-
 export function setupInventory() {
-  resetState();
-  pkit.context.set('roles', ['admin', 'staff', 'public']);
+  const pkit = new Pkit({ roles: ['admin', 'staff', 'public'] });
 
   const items = pkit.module('inventory').module('items');
   const itemsAll = items.name('all');
@@ -58,7 +44,7 @@ export function setupInventory() {
   reports.role('staff').registerActions({ find: { enabled: true, properties: '*' } });
   reports.role('admin').registerActions({ find: { enabled: true, properties: '*' } });
 
-  return { items, itemsAll, itemsUpdateOnly, reports };
+  return { pkit, items, itemsAll, itemsUpdateOnly, reports };
 }
 
 export function allowHook(): void {}

@@ -21,7 +21,9 @@ async function buildBundles(format: 'esm' | 'cjs', entrypoints: string[]): Promi
   }
 }
 
-await buildBundles('esm', ['./src/index.ts', './src/types.ts', './src/cli/generate.ts', './src/cli/child.ts']);
-await buildBundles('cjs', ['./src/index.ts', './src/types.ts']);
+const ENTRYPOINTS = ['./src/index.ts', './src/types.ts'];
+
+await buildBundles('esm', ENTRYPOINTS);
+await buildBundles('cjs', ENTRYPOINTS);
 execFileSync('bunx', ['tsc', '--project', 'tsconfig.build.json'], { stdio: 'inherit' });
 console.log('dist ready: esm, cjs, types');

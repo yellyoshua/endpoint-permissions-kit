@@ -1,25 +1,12 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
-import pkit from '../src/index';
-import { ADMIN_REPORTS, ADMIN_ITEMS_ALL, STAFF_REPORTS, STAFF_ITEMS_ALL, STAFF_ITEMS_UPDATE_ONLY, resetState, setupInventory } from './helpers';
+import { describe, expect, test } from 'bun:test';
+import { ADMIN_REPORTS, ADMIN_ITEMS_ALL, STAFF_REPORTS, STAFF_ITEMS_ALL, STAFF_ITEMS_UPDATE_ONLY, setupInventory } from './helpers';
 
 const noAccess = { find: false, update: false, create: false, remove: false };
 
 describe('permissions', () => {
-  beforeEach(resetState);
-
-  describe('sealing', () => {
-    test('throws NOT_SEALED from named and forUser before seal()', () => {
-      setupInventory();
-
-      expect(readCatalog).toThrow(/pkit\.seal\(\) has not been called/);
-      expect(pkit.permissions.forUser.bind(null, { role: 'staff', permissions: [] })).toThrow(/pkit\.seal\(\) has not been called/);
-    });
-  });
-
   describe('named catalog', () => {
     test('lists only assignable identifiers with their registered actions', () => {
-      setupInventory();
-      pkit.seal();
+      const { pkit } = setupInventory();
 
       const catalog = pkit.permissions.named;
 
@@ -42,8 +29,7 @@ describe('permissions', () => {
 
   describe('forUser resolution', () => {
     test('resolves direct assignments and one-hop grants', () => {
-      setupInventory();
-      pkit.seal();
+      const { pkit } = setupInventory();
 
       expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_REPORTS] })).toEqual({
         [STAFF_ITEMS_ALL]: { ...noAccess, find: true },
@@ -56,8 +42,7 @@ describe('permissions', () => {
     });
 
     test('grants nothing by role alone without assignments', () => {
-      setupInventory();
-      pkit.seal();
+      const { pkit } = setupInventory();
 
       expect(pkit.permissions.forUser({ role: 'admin', permissions: [] })).toEqual({});
       expect(pkit.permissions.forUser({ role: 'public', permissions: ['public::inventory.items::all'] })).toEqual({
@@ -66,8 +51,7 @@ describe('permissions', () => {
     });
 
     test('prefers the direct assignment over grants', () => {
-      setupInventory();
-      pkit.seal();
+      const { pkit } = setupInventory();
 
       const access = pkit.permissions.forUser({ role: 'admin', permissions: [ADMIN_REPORTS, ADMIN_ITEMS_ALL] });
 
@@ -80,8 +64,7 @@ describe('permissions', () => {
 
   describe('identity validation', () => {
     test('validates the identity the same way validate does', () => {
-      setupInventory();
-      pkit.seal();
+      const { pkit } = setupInventory();
 
       expect(pkit.permissions.forUser.bind(null, { role: 'nobody' as never, permissions: [] })).toThrow(expect.objectContaining({ code: 'UNKNOWN_ROLE' }));
       expect(pkit.permissions.forUser.bind(null, { permissions: [] } as never)).toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
@@ -94,8 +77,7 @@ describe('permissions', () => {
 
   describe('immutability', () => {
     test('returns frozen, prototype-less views', () => {
-      setupInventory();
-      pkit.seal();
+      const { pkit } = setupInventory();
 
       const access = pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_REPORTS] });
 
@@ -107,5 +89,3 @@ describe('permissions', () => {
     });
   });
 });
-
-function readCatalog() { return pkit.permissions.named; }

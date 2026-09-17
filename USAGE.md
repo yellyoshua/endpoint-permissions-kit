@@ -28,21 +28,33 @@ The role alone authorizes nothing. An administrator without assignments has acce
 
 ## Registration and startup
 
-The configuration must be evaluated before the permission modules. A separate module prevents ESM import evaluation order from running a registration before the catalog.
+The library keeps no global state. One central file creates the `Pkit` instance and exports it; every permission file imports that instance and registers on it; the handler imports the same instance to call `validate()`. The permission files export nothing, so with a bundler that tree-shakes side-effect imports they must be imported from a file that exports something the app uses: the file below that imports them and re-exports the instance. Keep the instance in its own file, because ESM evaluates imports before the body of the importer and a permission file importing the file that imports it would read the instance before it exists.
 
-`pkit.config.js`:
+`pkit.ts`:
 
-```js
-import pkit from 'endpoint-permissions-kit';
+```ts
+import Pkit from 'endpoint-permissions-kit';
 
-pkit.context.set('roles', ['admin', 'staff', 'public']);
-pkit.context.set('cropper', false);
+export const pkit = new Pkit({
+  roles: ['admin', 'staff', 'public'],
+  cropper: false,
+  reservedFields: [],
+});
+```
+
+`permissions.ts`:
+
+```ts
+import './modules/marketing/portals/permissions.js';
+import './modules/marketing/dashboard/permissions.js';
+
+export { pkit } from './pkit.js';
 ```
 
 `modules/marketing/portals/permissions.js`:
 
 ```js
-import pkit from 'endpoint-permissions-kit';
+import { pkit } from '../../../pkit.js';
 
 const portals = pkit.module('marketing').module('portals');
 const portalsAll = portals.name('all');
@@ -70,10 +82,6 @@ portalsAll.grantTo('staff::marketing.dashboard::all').registerActions({
   find: { enabled: true, properties: ['id', 'name', 'assetId'] },
 });
 
-portalsUpdateOnly.grantTo('staff::marketing.dashboard::all').registerActions({
-  find: { enabled: true, properties: ['id', 'name', 'assetId'] },
-});
-
 function checkPublishedPortal(data, context) {
   if (data.status === 'published') {
     throw new Error('Published portals cannot be removed');
@@ -94,7 +102,7 @@ portalsUpdateOnly.role('staff').hook('update', checkPortalOwner);
 `modules/marketing/dashboard/permissions.js`:
 
 ```js
-import pkit from 'endpoint-permissions-kit';
+import { pkit } from '../../../pkit.js';
 
 const dashboard = pkit.module('marketing').module('dashboard').name('all');
 
@@ -110,38 +118,49 @@ dashboard.role('admin').registerActions({
 `app.js`:
 
 ```js
-import pkit from 'endpoint-permissions-kit';
-import './pkit.config.js';
-import './modules/marketing/portals/permissions.js';
-import './modules/marketing/dashboard/permissions.js';
+import { pkit } from './permissions.js';
 
-pkit.seal();
+void pkit.permissions.named;
+
+export async function findPortals(session, body) {
+  return pkit.validate({
+    action: 'marketing.portals',
+    method: 'find',
+    role: session.role,
+    permissions: session.permissions,
+    data: body,
+    context: { user: session.user },
+  });
+}
 ```
 
-Grants may be registered before the module they reference is imported. `seal()` resolves cross-references once every file is loaded, checks role hooks and materializes the views. It is idempotent. Registering permissions, grants, hooks or roles after sealing throws `SEALED`. Every registration validates the whole literal before modifying state.
+Grants may be registered before the module they reference is imported. The cross-checks that need every file loaded run lazily: the first `validate()`, `permissions.named` or `permissions.forUser` after the last registration compiles an internal snapshot, checks cross-references and role hooks, and reuses it until the next registration. An invalid registry makes `validate()` return `VALIDATION_ERROR` with the message `registry has invalid definitions` and the `INVALID_DEFINITION` `PkitError` as `cause`; the views throw that `PkitError`. Reading `pkit.permissions.named` at startup, as `app.js` does, surfaces those errors before the first request. Registering after a `validate()` is valid and invalidates the snapshot. Every registration validates the whole literal before modifying state.
 
 `all` and `update-only` are labels. `all` does not enable every method and `update-only` contains `find` and `update` because it was declared that way; the library does not interpret names.
 
-A name exists only when some role registers actions on it. `.name(...)` builds a builder, but a name that only has hooks or grants makes `seal()` fail with `INVALID_DEFINITION`: neither a hook nor a `grantTo` creates the capability they later use as proof of existence.
+A name exists only when some role registers actions on it. `.name(...)` builds a builder, but a name that only has hooks or grants fails the lazy check with `INVALID_DEFINITION`: neither a hook nor a `grantTo` creates the capability they later use as proof of existence.
 
 ## Roles
 
-`context.set('roles', [...])` declares the whole catalog. If the integration does not call it, the catalog contains only `general`, which is used explicitly with `.role('general')`. `general` is an ordinary role: it is not added to a declared catalog and it does not back other roles.
+`new Pkit({ roles: [...] })` declares the whole catalog and types it: `Pkit<'admin' | 'staff' | 'public'>` rejects `.role('adminn')` at compile time. `context.set('roles', [...])` replaces the catalog at runtime and only accepts roles of that type. If the integration declares none, the catalog contains only `general`, which is used explicitly with `.role('general')`. `general` is an ordinary role: it is not added to a declared catalog and it does not back other roles.
 
 The role is always explicit. `registerActions` and role hooks require `.role(x)`; `validate` and `permissions.forUser` require `role`. A role outside the catalog produces `ROLE_NOT_DECLARED` when registering and `UNKNOWN_ROLE` when validating.
 
-`*` is reserved for global hooks: declaring it in `context.set` or using it as a permission name throws `INVALID_DEFINITION`.
+`*` is reserved for global hooks: declaring it in the constructor or in `context.set`, or using it as a permission name throws `INVALID_DEFINITION`.
 
 ## Context keys
 
-`context.set(key, value)` accepts two keys and `context.get(key)` reads them back. Both are frozen by `seal()`: setting them afterwards throws `SEALED`.
+The constructor options and `context.set(key, value)` accept the same three keys; `context.get(key)` reads them back. `context.set` can be called at any time: each call invalidates the internal snapshot, so the next `validate()` or view sees the new value.
 
 | Key | Value | Default | Effect |
 | --- | --- | --- | --- |
-| `roles` | `string[]` | `['general']` | The role catalog, declared before the first registration |
+| `roles` | `string[]` | `['general']` | The role catalog; every registration and request is checked against it |
 | `cropper` | `boolean` | `false` | How `validate()` compares the keys of `data` with the permission |
+| `reservedFields` | `string[]` | `[]` | Paths that every permission with a property list allows, in both modes |
 
 With `cropper: false` a path of `data` outside the permission denies the request with `PROPERTIES_NOT_ALLOWED`. With `cropper: true` nothing is denied: `result.data` keeps only the allowed paths. A non-boolean value throws `INVALID_DEFINITION`.
+
+`reservedFields` lists paths such as `['id', 'meta.version']` that are never denied and always kept by the crop, for every permission declared with a property list. Each path is validated once with the rules of declared properties, the list replaces the previous one on each call, and matching is exact, like any declared property.
 
 ## Identifiers and assignments
 
@@ -168,7 +187,7 @@ The role is part of the key on purpose: it allows auditing which role each row b
 
 Changing the role, module or name changes the persisted key and requires migrating the rows before deploying: an unknown row blocks the user, as described under validation. Changing actions under the same key does not touch the database. Changing a user's role also requires rewriting their identifiers; the library does not replace prefixes. Identifiers derived from a grant are not stored; removing the source removes the derived access on the next resolution. Removing the source does not remove a direct assignment that also exists.
 
-The library does not query the database and does not manage sessions. The application loads assignments from a trusted source and refreshes sessions or caches when it revokes them. A change in the sealed registrations requires reloading the process; revocation does not propagate on its own to existing processes or sessions.
+The library does not query the database and does not manage sessions. The application loads assignments from a trusted source and refreshes sessions or caches when it revokes them. A change in the registrations of a running process is visible on the next `validate()` of that process only; revocation does not propagate on its own to existing processes or sessions.
 
 ## Grants
 
@@ -188,7 +207,7 @@ The relation is between permissions, not between methods of the same name: an id
 
 Grants are one hop. Access received through a grant does not count as an assignment that activates another grant. To extend access to a third permission, declare another `grantTo` for the same assignable identifier. Cycles are valid: dashboard can grant on portals and portals on dashboard, because each grant is evaluated separately. Only self-reference is rejected.
 
-At registration time the identifier format, its role, self-reference, the block shape and the absence of another block for the same identifier on that name (`DUPLICATE_REGISTRATION`) are validated. At seal time it is checked that the enabling identifier exists as assignable, that the receiving name has actions registered for some role and that every method of the block is declared by some role of that name. The block's fields are not compared with other definitions: the grant is the authority over its fields.
+At registration time the identifier format, its role, self-reference, the block shape and the absence of another block for the same identifier on that name (`DUPLICATE_REGISTRATION`) are validated. The lazy check before the first `validate()` or view verifies that the enabling identifier exists as assignable, that the receiving name has actions registered for some role and that every method of the block is declared by some role of that name. The block's fields are not compared with other definitions: the grant is the authority over its fields.
 
 ## Validating a request
 
@@ -217,7 +236,7 @@ The shape is the same for the four methods: `data` carries the fields of that me
 
 The assignment list is validated in full, in this order per identifier: format (`INVALID_INPUT`), role equal to the authenticated one (`PERMISSION_ROLE_MISMATCH`), existence as assignable (`UNKNOWN_PERMISSION`) and a single name per `role::module` (`AMBIGUOUS_PERMISSION`). Any failure denies the whole request, even if the target does not depend on the faulty row: a stale row in the database blocks the user until it is cleaned up. An empty list denies with `PERMISSION_NOT_ASSIGNED`. Repeated identical identifiers are deduplicated.
 
-Evaluation order: sealed registry, input shape, role, assignments (`AMBIGUOUS_PERMISSION`), module (`UNKNOWN_ACTION`), name resolution, access resolution, data properties, and hooks.
+Evaluation order: registry check, input shape, role, assignments (`AMBIGUOUS_PERMISSION`), module (`UNKNOWN_ACTION`), name resolution, access resolution, data properties, and hooks.
 
 Resolution of `(role, module, method)`:
 
@@ -288,7 +307,7 @@ The location of the hook determines its scope:
 
 A hook on `portalsAll.role('staff')` runs when authorizing `marketing.portals`, name `all`, role `staff`, whether the access comes from a direct assignment or from a grant from dashboard. It does not run for `admin` nor for `update-only`. Dashboard hooks do not run when querying portals. There is no hook inheritance between names or roles.
 
-A role hook is valid at seal time if some path exists for that role, name and method: a direct definition or a grant whose identifier has that role. Without a path it throws `INVALID_DEFINITION`.
+A role hook passes the lazy check if some path exists for that role, name and method: a direct definition or a grant whose identifier has that role. Without a path it throws `INVALID_DEFINITION`.
 
 Order: module hooks, name hooks and name hooks for the authenticated role. All of them run with `Promise.allSettled`; errors keep the group and registration order even if they finish in another order. Each registration runs once per request. One failure denies the whole operation. Return values are ignored.
 
@@ -317,14 +336,13 @@ function checkDashboardPortalAccess(data, context, permissions) {
 
 ## Errors
 
-The configuration, registration, sealing and view methods throw `PkitError` exceptions with a `code`. Only `validate()` returns `{ result, errors }`; the application translates the codes to its transport and decides what to expose.
+The configuration, registration and view methods throw `PkitError` exceptions with a `code`. Only `validate()` returns `{ result, errors }`; the application translates the codes to its transport and decides what to expose.
 
 | Code | Information |
 | --- | --- |
 | `INVALID_DEFINITION` | Malformed segment, name, identifier or property path; grant with `enabled: false`, `'*'`, self-reference or missing reference; name without actions; role hook without a path |
 | `DUPLICATE_REGISTRATION` | Second `registerActions` for `(role, module, name)` or second block for the same grant |
 | `ROLE_NOT_DECLARED` | Role outside the catalog when registering, including the `grantTo` prefix |
-| `SEALED` / `NOT_SEALED` | Registration after `seal()` / use before `seal()` |
 | `INVALID_INPUT` | Request without `action`, `role` or `permissions`; malformed identifier; `data` or `context` with an invalid shape |
 | `UNKNOWN_ROLE` / `UNKNOWN_ACTION` | Unknown role or module at runtime |
 | `UNKNOWN_PERMISSION` | An assigned identifier that is not assignable |
@@ -339,15 +357,15 @@ The configuration, registration, sealing and view methods throw `PkitError` exce
 Flow:
 
 ```text
-config → context.set → registerActions / hook → seal
-request → validate → sealed → input shape → role → action → method → data properties → hooks
+startup → new Pkit(options) → registerActions / grantTo / hook → permissions.named (optional early check)
+request → validate → registry check → input shape → role → action → method → data properties → hooks
 ```
 
 `validate()` catches the exceptions of its phases and returns a single contract. It never turns a failure into a successful result. Per failure, `validate` responds:
 
 | Failure | `validate` response |
 | --- | --- |
-| Open registry | `NOT_SEALED` |
+| Invalid registry: missing grant source, name without actions, undeclared grant method, role hook without a path, module hooks without names | `VALIDATION_ERROR`, message `registry has invalid definitions`, the `INVALID_DEFINITION` `PkitError` as `cause` |
 | Invalid shape of `data` or `context` | `INVALID_INPUT` |
 | Role outside the catalog | `UNKNOWN_ROLE` |
 | Module not registered | `UNKNOWN_ACTION` |
@@ -373,31 +391,32 @@ const access = pkit.permissions.forUser({ role: 'staff', permissions: ['staff::m
 ```js
 {
   'staff::marketing.portals::all': { find: true, update: false, create: false, remove: false },
-  'staff::marketing.portals::update-only': { find: true, update: false, create: false, remove: false },
   'staff::marketing.dashboard::all': { find: true, update: false, create: false, remove: false },
 }
 ```
 
-The views are frozen and have no prototype; before `seal()` they throw `NOT_SEALED`. They describe configuration: the hooks and data of each request still require `validate()`.
+The views are frozen and have no prototype; on an invalid registry they throw the `INVALID_DEFINITION` `PkitError`. They describe configuration: the hooks and data of each request still require `validate()`.
 
 ## Role types
 
-```sh
-pkit generate
-pkit generate --config ./config/roles.mjs --out ./src/pkit.generated.d.ts
-pkit generate --check
+The role type is inferred from the constructor. An array literal passed inline keeps its literal union, so `as const` is not needed; it is needed only when the catalog is first stored in a variable, because `const roles = ['admin', 'staff']` widens to `string[]`:
+
+```ts
+import Pkit from 'endpoint-permissions-kit';
+import type { PermissionId, Role } from 'endpoint-permissions-kit/types';
+
+export const pkit = new Pkit({ roles: ['admin', 'staff', 'public'] });
+
+export type AppRole = typeof pkit extends Pkit<infer R> ? Role<R> : never;
+export type AppPermissionId = typeof pkit extends Pkit<infer R> ? PermissionId<R> : never;
 ```
 
-The generator imports the config in an isolated process and augments `RoleRegistry` from `endpoint-permissions-kit/types` with the declared roles, or with `general` if the config declares none. `Role` and `PermissionId` derive from that registry: `'nobody::x::y'` does not compile. The generated file must be included in the consumer's TypeScript program.
+`typeof pkit` is `Pkit<'admin' | 'staff' | 'public'>`: `.role('adminn')`, `validate({ role: 'nobody' })` and `grantTo('nobody::x::y')` do not compile. `Role<R>`, `PermissionId<R>`, `ValidateInput<R>`, `UserAssignments<R>`, `NamedPermissionCatalog<R>` and `UserPermissionMap<R>` take the same generic; without it `R` is `string`, for code that only imports types. Without `roles` the instance is `Pkit<'general'>`.
 
-`--check` writes nothing: it exits with 1 if the file is missing or stale. Success exits with 0; an invalid command exits with 2; runtime errors exit with 1. The config must declare roles without starting servers or connections.
+## Implementation
 
-## Functional implementation
-
-The library's functions are declared with `function` at module scope. There are no arrow functions, nested functions or parameter defaults. Builders bind arguments with `bind` and keep their identity when chaining calls or extracting methods. Definitions are copied and frozen at registration; views are materialized once at seal time. Each input is checked by the API that receives it: `src/context.ts`, `src/registry.ts`, `src/validate.ts` and `src/permissions.ts` own their own boundaries, and the rules they share live in `src/identifiers.ts` (the identifier format), `src/definitions.ts` (the `registerActions` literal) and `src/state.ts` (the open/sealed lifecycle). `src/resolve.ts` contains the identity check and the resolution shared by `validate` and `forUser`; `src/properties.ts` owns the comparison and the cropping of the paths of `data`, with one algorithm per mode. The README "Project layout" section describes the responsibility of every file.
+The library's functions are declared with `function` at module scope. There are no arrow functions, nested functions or parameter defaults. `Pkit` and the four builders (`ModuleBuilder`, `NameBuilder`, `RoleBuilder`, `GrantBuilder`) are classes because they hold per-instance state; the builders are cached by key, so chaining returns the same object, and their public methods are bound in the constructor, so extracted methods keep working. Everything else is an object of functions that receives the registry or the snapshot as an argument: `src/identifiers.ts` (the identifier format), `src/definitions.ts` (the `registerActions` and grant literals), `src/registry.ts` (the registry structure and its mutations), `src/snapshot.ts` (the lazy cross-checks and the frozen views), `src/resolve.ts` (the identity check and the resolution shared by `validate` and `forUser`), `src/properties.ts` (the comparison and the cropping of the paths of `data`, with one algorithm per mode), `src/validate.ts` (the phases of `validate()` and the `{ result, errors }` contract) and `src/permissions.ts` (the `named` and `forUser` views). Definitions are copied and frozen at registration; the snapshot is built once after the last registration. The README "Project layout" section describes the responsibility of every file.
 
 ## Scope
 
-The library does not provide framework adapters, does not access databases, does not discover routes in the filesystem, does not manage sessions and does not hot-reload the sealed registry. The application keeps those responsibilities: it calls `validate()` from its handlers, loads assignments from a trusted source, decides which module and method each route protects, authenticates users, and restarts the process after changing sealed registrations.
-
-The registry state lives in `globalThis[Symbol.for('endpoint-permissions-kit')]`. The ESM and CJS copies of the package share that state within one process, so a config loaded through `import` and a module loaded through `require` register into the same catalog.
+The library does not provide framework adapters, does not access databases, does not discover routes in the filesystem, does not manage sessions and does not propagate registrations between processes. The application keeps those responsibilities: it calls `validate()` from its handlers, loads assignments from a trusted source, decides which module and method each route protects, and authenticates users.

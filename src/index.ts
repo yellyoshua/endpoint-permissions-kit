@@ -1,9 +1,5 @@
 import constants from './constants';
-import context from './context';
-import permissions from './permissions';
-import registry from './registry';
-import sealer from './seal';
-import validator from './validate';
+import Pkit from './pkit';
 
 export type {
   ActionDef,
@@ -22,9 +18,9 @@ export type {
   PermissionId,
   PkitError,
   PkitErrorCode,
+  PkitOptions,
   Properties,
   Role,
-  RoleRegistry,
   UserAssignments,
   UserPermissionMap,
   ValidateData,
@@ -34,18 +30,13 @@ export type {
   ValidationErrorCode,
 } from './types';
 
-export type { GrantBuilder, ModuleBuilder, NameBuilder, RoleBuilder } from './registry';
+export type { default as ModuleBuilder } from './module-builder';
+export type { default as NameBuilder } from './name-builder';
+export type { default as RoleBuilder } from './role-builder';
+export type { default as GrantBuilder } from './grant-builder';
 
 export const METHODS = constants.METHODS;
 
-export const seal = sealer.seal;
+export { Pkit };
 
-export const validate = validator.validate;
-
-const defineModule = registry.defineModule;
-
-export { context, permissions, defineModule as module };
-
-export const pkit = Object.freeze({ context, module: defineModule, seal, permissions, validate });
-
-export default pkit;
+export default Pkit;

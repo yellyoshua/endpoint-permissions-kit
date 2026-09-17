@@ -1,11 +1,10 @@
+import type { Registry, Snapshot } from './registry';
+import type { Context, Data, HookFn, Method, PkitError, ValidateResult, ValidationError } from './types';
 import constants from './constants';
-import definitions from './definitions';
 import errors from './errors';
 import properties from './properties';
 import resolve from './resolve';
-import state from './state';
-import type { State } from './state';
-import type { Context, Data, HookFn, PkitError, ValidateInput, ValidateResult, ValidationError } from './types';
+import snapshot from './snapshot';
 
 interface PreparedRequest {
   readonly hooks: readonly HookFn[];
@@ -15,27 +14,31 @@ interface PreparedRequest {
 }
 
 const validator = {
-  async validate(input: ValidateInput): Promise<ValidateResult> {
+  async run(target: Registry, input: unknown): Promise<ValidateResult> {
+    let compiled: Snapshot;
+
     try {
-      const request = prepareRequest(input, state.getOrCreate());
+      compiled = snapshot.of(target);
+    } catch (cause) {
+      if (!errors.isPkitError(cause)) return { result: null, errors: Object.freeze([translateFailure(cause)]) };
 
-      const hookCalls: Promise<unknown>[] = [];
+      return { result: null, errors: Object.freeze([{ code: 'VALIDATION_ERROR', message: 'registry has invalid definitions', cause }]) };
+    }
 
-      for (const hook of request.hooks) hookCalls.push(invokeHook(hook, request));
+    try {
+      const request = prepareRequest(target, compiled, input);
+      const calls: Promise<unknown>[] = [];
 
-      const hookResults = await Promise.allSettled(hookCalls);
+      for (const hook of request.hooks) calls.push(invokeHook(hook, request));
 
-      const hookErrors: ValidationError[] = [];
+      const settled = await Promise.allSettled(calls);
+      const failures: ValidationError[] = [];
 
-      for (const hookResult of hookResults) {
-        if (hookResult.status === 'fulfilled') continue;
-
-        const hookCause: unknown = hookResult.reason;
-
-        hookErrors.push({ code: 'HOOK_ERROR', message: describeHookFailure(hookCause), cause: hookCause });
+      for (const outcome of settled) {
+        if (outcome.status === 'rejected') failures.push({ code: 'HOOK_ERROR', message: describeFailure(outcome.reason), cause: outcome.reason });
       }
 
-      if (hookErrors.length) return { result: null, errors: Object.freeze(hookErrors) };
+      if (failures.length > 0) return { result: null, errors: Object.freeze(failures) };
 
       return { result: { data: request.data }, errors: Object.freeze([] as const) };
     } catch (cause) {
@@ -44,64 +47,55 @@ const validator = {
   },
 };
 
-function prepareRequest(input: ValidateInput, currentState: State): PreparedRequest {
-  const snapshot = state.requireSnapshot(currentState);
+export default validator;
 
-  const method = definitions.checkMethod(input.method, 'INVALID_INPUT', 'method is required');
+function prepareRequest(target: Registry, compiled: Snapshot, input: unknown): PreparedRequest {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) throw errors.create('INVALID_INPUT', 'validate expects an object');
 
-  const { action, permissions } = input;
+  const { action, method, role, permissions } = input as Record<string, unknown>;
+
+  if (typeof method !== 'string' || !(constants.METHODS as readonly string[]).includes(method)) {
+    throw errors.create('INVALID_INPUT', `method must be one of ${constants.METHODS.join(', ')}`);
+  }
 
   if (typeof action !== 'string') throw errors.create('INVALID_INPUT', 'action is required');
 
-  const data = readOptionalObject(input.data, 'data must be an object');
+  if (typeof role !== 'string') throw errors.create('INVALID_INPUT', 'role is required');
 
-  const context = readOptionalObject(input.context, 'context must be an object');
+  if (!Array.isArray(permissions)) throw errors.create('INVALID_INPUT', 'permissions must be an array of identifiers');
 
-  const identity = resolve.identity(input, snapshot, currentState.roles);
+  const data = readOptionalObject((input as Record<string, unknown>).data, 'data');
+  const context = readOptionalObject((input as Record<string, unknown>).context, 'context');
 
-  const { role, assigned } = identity;
-
-  const registeredModule = currentState.modules.get(action);
-
-  if (!registeredModule) throw errors.create('UNKNOWN_ACTION', `module "${action}" is not registered`);
-
-  const chosen = resolve.permission(registeredModule, action, identity);
-
-  if (!chosen) {
-    throw errors.create('PERMISSION_NOT_ASSIGNED', `no name of module "${action}" is assigned or granted to role "${role}" by the user permissions`);
-  }
-
-  const { permissionId, entry: nameEntry } = chosen;
-
-  const access = resolve.access(nameEntry, permissionId, role, method, assigned);
-
-  if (access.status === 'unassigned') {
-    throw errors.create('PERMISSION_NOT_ASSIGNED', `"${permissionId}" is not assigned or granted by the user permissions`);
-  }
-
-  if (access.status === 'disabled') throw errors.create('METHOD_DISABLED', `"${permissionId}.${method}" is not enabled`);
-
-  const hookGroups = [
-    registeredModule.hooks.get(method),
-    nameEntry.hooks.get(constants.GLOBAL_HOOK_OWNER)?.get(method),
-    nameEntry.hooks.get(role)?.get(method),
-  ];
+  const identity = resolve.checkIdentity(compiled, role, permissions);
+  const access = resolve.resolveAccess(compiled, role, action, method as Method, identity);
 
   const hooks: HookFn[] = [];
+  const groups = [
+    compiled.modules.get(action)?.hooks.get(method as Method),
+    access.entry.hooks.get(method as Method),
+    access.entry.roleHooks.get(role)?.get(method as Method),
+  ];
 
-  for (const group of hookGroups) {
-    if (group) hooks.push(...group);
+  for (const group of groups) {
+    if (group !== undefined) hooks.push(...group);
   }
 
-  const allowedData = properties.resolve(data, access.properties, currentState.reservedFields, currentState.cropper);
+  if (target.cropper) return { hooks, context, permissions, data: properties.crop(data, access.properties, target.reservedFields) };
 
-  return { hooks, context, permissions, data: allowedData };
+  const denied = properties.deny(data, access.properties, target.reservedFields);
+
+  if (denied.length > 0) {
+    throw Object.assign(errors.create('PROPERTIES_NOT_ALLOWED', `fields not allowed: ${denied.join(', ')}`), { fields: denied });
+  }
+
+  return { hooks, context, permissions, data };
 }
 
-function readOptionalObject(value: unknown, message: string): Data {
+function readOptionalObject(value: unknown, label: string): Data {
   if (value === undefined) return {};
 
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw errors.create('INVALID_INPUT', message);
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw errors.create('INVALID_INPUT', `${label} must be an object`);
 
   return value as Data;
 }
@@ -110,26 +104,18 @@ async function invokeHook(hook: HookFn, request: PreparedRequest): Promise<unkno
   return hook(request.data, request.context, request.permissions);
 }
 
-function describeHookFailure(reason: unknown): string {
-  try {
-    return reason instanceof Error ? reason.message : String(reason);
-  } catch {
-    return 'the hook threw a value that cannot be described';
-  }
+function describeFailure(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+
+  return errors.describe(reason);
 }
 
 function translateFailure(cause: unknown): ValidationError {
-  if (!(cause instanceof Error) || cause.name !== 'PkitError') {
-    return { code: 'VALIDATION_ERROR', message: 'permission could not be validated', cause };
-  }
+  if (!errors.isPkitError(cause)) return { code: 'VALIDATION_ERROR', message: 'permission could not be validated', cause };
 
-  const permissionError = cause as PkitError;
+  const failure = cause as PkitError;
 
-  if (permissionError.code === 'PROPERTIES_NOT_ALLOWED') {
-    return { code: permissionError.code, message: permissionError.message, fields: permissionError.fields };
-  }
+  if (failure.code === 'PROPERTIES_NOT_ALLOWED') return { code: failure.code, message: failure.message, fields: failure.fields };
 
-  return { code: permissionError.code, message: permissionError.message };
+  return { code: failure.code, message: failure.message };
 }
-
-export default validator;

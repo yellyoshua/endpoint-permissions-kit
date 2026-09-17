@@ -4,7 +4,7 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.2.x | Yes |
+| 0.3.x | Yes |
 
 Only the latest release line receives security fixes.
 

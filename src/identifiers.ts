@@ -1,75 +1,75 @@
 import constants from './constants';
 import errors from './errors';
-import type { PermissionId, PkitErrorCode } from './types';
 
-/** The three components a permission identifier is made of, already split. */
 export interface PermissionReference {
+  readonly id: string;
   readonly role: string;
-  readonly action: string;
+  readonly module: string;
   readonly name: string;
 }
 
 const identifiers = {
-  build(role: string, action: string, name: string): PermissionId {
-    return `${role}${constants.PERMISSION_ID_SEPARATOR}${action}${constants.PERMISSION_ID_SEPARATOR}${name}` as PermissionId;
+  build(role: string, modulePath: string, name: string): string {
+    return `${role}${constants.PERMISSION_ID_SEPARATOR}${modulePath}${constants.PERMISSION_ID_SEPARATOR}${name}`;
   },
 
-  /**
-   * Splits `role::module::name` and checks every component.
-   * The caller supplies the code and the subject of the message because the same
-   * syntax rule is reported as a definition error when registering and as an
-   * input error when validating a request.
-   */
-  parse(value: unknown, code: PkitErrorCode, subject: string): PermissionReference {
-    if (typeof value !== 'string') throw invalidIdentifier(value, code, subject);
+  prefix(role: string, modulePath: string): string {
+    return `${role}${constants.PERMISSION_ID_SEPARATOR}${modulePath}${constants.PERMISSION_ID_SEPARATOR}`;
+  },
+
+  joinModule(segments: readonly string[]): string {
+    return segments.join(constants.MODULE_SEPARATOR);
+  },
+
+  parse(value: unknown): PermissionReference | null {
+    if (typeof value !== 'string') return null;
 
     const parts = value.split(constants.PERMISSION_ID_SEPARATOR);
-    const [role, action, name] = parts;
 
-    if (parts.length !== 3 || role === undefined || action === undefined || name === undefined) {
-      throw invalidIdentifier(value, code, subject);
+    if (parts.length !== 3) return null;
+
+    const [role, modulePath, name] = parts as [string, string, string];
+
+    if (!isValidLabel(role) || !isValidLabel(name) || !isValidModulePath(modulePath)) return null;
+
+    return Object.freeze({ id: value, role, module: modulePath, name });
+  },
+
+  checkSegment(segment: unknown): string {
+    if (typeof segment !== 'string' || !isValidSegment(segment)) {
+      throw errors.create('INVALID_DEFINITION', `Invalid module segment: ${errors.describe(segment)}`);
     }
 
-    const isValidRole = isCleanSegment(role) && role !== constants.GLOBAL_HOOK_OWNER;
-    const isValidName = isCleanSegment(name) && name !== constants.GLOBAL_HOOK_OWNER;
-    const isValidAction = action.split(constants.MODULE_SEPARATOR).every(isCleanSegment);
-
-    if (!isValidRole || !isValidName || !isValidAction) throw invalidIdentifier(value, code, subject);
-
-    return { role, action, name };
+    return segment;
   },
 
-  checkRole(role: unknown): void {
-    if (typeof role === 'string' && isCleanSegment(role) && role !== constants.GLOBAL_HOOK_OWNER) return;
+  checkName(name: unknown): string {
+    if (typeof name !== 'string' || !isValidLabel(name)) {
+      throw errors.create('INVALID_DEFINITION', `Invalid permission name: ${errors.describe(name)}`);
+    }
 
-    throw errors.create('INVALID_DEFINITION',
-      `invalid role: "${errors.describe(role)}" (non-empty string, no ":" or surrounding whitespace; "${constants.GLOBAL_HOOK_OWNER}" is reserved for global hooks)`,
-    );
+    return name;
   },
 
-  checkModuleSegment(segment: unknown): void {
-    if (typeof segment === 'string' && isCleanSegment(segment) && !segment.includes(constants.MODULE_SEPARATOR)) return;
+  checkRoleLabel(role: unknown): string {
+    if (typeof role !== 'string' || !isValidLabel(role)) {
+      throw errors.create('INVALID_DEFINITION', `Invalid role: ${errors.describe(role)}`);
+    }
 
-    throw errors.create('INVALID_DEFINITION',
-      `invalid module name: "${errors.describe(segment)}" (non-empty string, no dots, no ":" or surrounding whitespace)`,
-    );
-  },
-
-  checkName(name: unknown): void {
-    if (typeof name === 'string' && isCleanSegment(name) && name !== constants.GLOBAL_HOOK_OWNER) return;
-
-    throw errors.create('INVALID_DEFINITION',
-      `invalid permission name: "${errors.describe(name)}" (non-empty string, no ":" or surrounding whitespace; "*" is reserved)`,
-    );
+    return role;
   },
 };
 
-function isCleanSegment(value: string): boolean {
-  return value.length > 0 && value.trim() === value && !value.includes(':');
-}
-
-function invalidIdentifier(value: unknown, code: PkitErrorCode, subject: string): Error {
-  return errors.create(code, `${subject}: "${errors.describe(value)}" (format role::module::name)`);
-}
-
 export default identifiers;
+
+function isValidLabel(label: string): boolean {
+  return label.length > 0 && label !== constants.GLOBAL_HOOK_MARKER && !label.includes(':') && label.trim() === label;
+}
+
+function isValidSegment(segment: string): boolean {
+  return segment.length > 0 && !segment.includes(constants.MODULE_SEPARATOR) && !segment.includes(':') && segment.trim() === segment;
+}
+
+function isValidModulePath(modulePath: string): boolean {
+  return modulePath.length > 0 && modulePath.split(constants.MODULE_SEPARATOR).every(isValidSegment);
+}

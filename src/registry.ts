@@ -1,229 +1,202 @@
+import type { PermissionReference } from './identifiers';
+import type { ActionDefs, GrantDefs, HookFn, Method, NamedPermissionCatalog, PkitOptions } from './types';
 import constants from './constants';
 import definitions from './definitions';
 import errors from './errors';
 import identifiers from './identifiers';
-import state from './state';
-import type { ModuleEntry, NameEntry, State } from './state';
-import type { ActionDefs, GrantDefs, HookFn, Method, PermissionId, Role } from './types';
 
-export interface ModuleBuilder {
-  module(segment: string): ModuleBuilder;
-  name(name: string): NameBuilder;
-  hook(method: Method, hook: HookFn): ModuleBuilder;
+export interface GrantEntry {
+  readonly source: PermissionReference;
+  readonly actions: GrantDefs;
 }
 
-export interface NameBuilder {
-  role(role: Role): RoleBuilder;
-  grantTo(permissionId: PermissionId): GrantBuilder;
-  hook(method: Method, hook: HookFn): NameBuilder;
+export interface NameEntry {
+  readonly actions: Map<string, ActionDefs>;
+  readonly grants: Map<string, GrantEntry>;
+  readonly hooks: Map<Method, HookFn[]>;
+  readonly roleHooks: Map<string, Map<Method, HookFn[]>>;
 }
 
-export interface RoleBuilder {
-  registerActions(actions: ActionDefs): RoleBuilder;
-  hook(method: Method, hook: HookFn): RoleBuilder;
+export interface ModuleEntry {
+  readonly names: Map<string, NameEntry>;
+  readonly hooks: Map<Method, HookFn[]>;
 }
 
-export interface GrantBuilder {
-  registerActions(actions: GrantDefs): GrantBuilder;
+export interface Snapshot {
+  readonly roles: ReadonlySet<string>;
+  readonly named: NamedPermissionCatalog;
+  readonly assignable: ReadonlySet<string>;
+  readonly modules: ReadonlyMap<string, ModuleEntry>;
+  readonly grantsBySource: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
 }
 
-interface ModuleScope {
-  action: string;
-  builder: ModuleBuilder;
-}
-
-/** `role` is `*` on a name-wide scope, which owns the hooks that run for every role. */
-interface NameScope<Builder> {
-  action: string;
-  name: string;
-  role: string;
-  builder: Builder;
-}
-
-interface GrantScope {
-  action: string;
-  name: string;
-  permissionId: string;
-  builder: GrantBuilder;
+export interface Registry {
+  roles: ReadonlySet<string>;
+  cropper: boolean;
+  reservedFields: readonly string[];
+  readonly modules: Map<string, ModuleEntry>;
+  snapshot: Snapshot | null;
 }
 
 const registry = {
-  defineModule(segment: string): ModuleBuilder {
-    identifiers.checkModuleSegment(segment);
+  create(options: PkitOptions<string>): Registry {
+    const created: Registry = {
+      roles: new Set([constants.GENERAL_ROLE]),
+      cropper: false,
+      reservedFields: Object.freeze([]),
+      modules: new Map(),
+      snapshot: null,
+    };
 
-    return createModuleBuilder(segment);
+    if (options.roles !== undefined) registry.setRoles(created, options.roles);
+    if (options.cropper !== undefined) registry.setCropper(created, options.cropper);
+    if (options.reservedFields !== undefined) registry.setReservedFields(created, options.reservedFields);
+
+    return created;
+  },
+
+  setRoles(target: Registry, roles: unknown): void {
+    if (!Array.isArray(roles) || roles.length === 0) {
+      throw errors.create('INVALID_DEFINITION', 'roles must be a non-empty array of role names');
+    }
+
+    const catalog = new Set<string>();
+
+    for (const role of roles) catalog.add(identifiers.checkRoleLabel(role));
+
+    target.roles = catalog;
+    target.snapshot = null;
+  },
+
+  setCropper(target: Registry, cropper: unknown): void {
+    if (typeof cropper !== 'boolean') {
+      throw errors.create('INVALID_DEFINITION', `cropper must be a boolean, received ${errors.describe(cropper)}`);
+    }
+
+    target.cropper = cropper;
+    target.snapshot = null;
+  },
+
+  setReservedFields(target: Registry, paths: unknown): void {
+    target.reservedFields = definitions.readPropertyPaths(paths, 'reservedFields');
+    target.snapshot = null;
+  },
+
+  checkRole(target: Registry, role: unknown): string {
+    const label = identifiers.checkRoleLabel(role);
+
+    if (!target.roles.has(label)) {
+      throw errors.create('ROLE_NOT_DECLARED', `Role ${label} is not declared: pass it in the roles option of the Pkit constructor`);
+    }
+
+    return label;
+  },
+
+  registerActions(target: Registry, modulePath: string, name: string, role: string, literal: unknown): void {
+    const actions = definitions.readActions(literal);
+    const existing = target.modules.get(modulePath)?.names.get(name)?.actions.get(role);
+
+    if (existing !== undefined) {
+      throw errors.create('DUPLICATE_REGISTRATION', `${identifiers.build(role, modulePath, name)} already has registered actions`);
+    }
+
+    nameEntry(target, modulePath, name).actions.set(role, actions);
+    target.snapshot = null;
+  },
+
+  registerGrant(target: Registry, modulePath: string, name: string, sourceId: unknown, literal: unknown): void {
+    const source = identifiers.parse(sourceId);
+
+    if (source === null) {
+      throw errors.create('INVALID_DEFINITION', `Invalid grant identifier: ${errors.describe(sourceId)}`);
+    }
+
+    if (!target.roles.has(source.role)) {
+      throw errors.create('ROLE_NOT_DECLARED', `Role ${source.role} of grant ${source.id} is not declared`);
+    }
+
+    if (source.module === modulePath && source.name === name) {
+      throw errors.create('INVALID_DEFINITION', `Grant ${source.id} references its own permission`);
+    }
+
+    const actions = definitions.readGrant(literal);
+    const existing = target.modules.get(modulePath)?.names.get(name)?.grants.get(source.id);
+
+    if (existing !== undefined) {
+      throw errors.create('DUPLICATE_REGISTRATION', `Grant from ${source.id} on ${modulePath}::${name} is already registered`);
+    }
+
+    nameEntry(target, modulePath, name).grants.set(source.id, Object.freeze({ source, actions }));
+    target.snapshot = null;
+  },
+
+  registerModuleHook(target: Registry, modulePath: string, method: unknown, fn: unknown): void {
+    const checked = checkHook(method, fn);
+
+    pushHook(moduleEntry(target, modulePath).hooks, checked.method, checked.fn);
+    target.snapshot = null;
+  },
+
+  registerNameHook(target: Registry, modulePath: string, name: string, method: unknown, fn: unknown): void {
+    const checked = checkHook(method, fn);
+
+    pushHook(nameEntry(target, modulePath, name).hooks, checked.method, checked.fn);
+    target.snapshot = null;
+  },
+
+  registerRoleHook(target: Registry, modulePath: string, name: string, role: string, method: unknown, fn: unknown): void {
+    const checked = checkHook(method, fn);
+    const entry = nameEntry(target, modulePath, name);
+    const perRole = entry.roleHooks.get(role) ?? new Map<Method, HookFn[]>();
+
+    entry.roleHooks.set(role, perRole);
+    pushHook(perRole, checked.method, checked.fn);
+    target.snapshot = null;
   },
 };
 
-function createModuleBuilder(action: string): ModuleBuilder {
-  const builder = {} as ModuleBuilder;
-  const scope = { action, builder };
-
-  return Object.assign(builder, {
-    module: appendModule.bind(null, action),
-    name: createNameBuilder.bind(null, action),
-    hook: registerModuleHook.bind(null, scope),
-  });
-}
-
-function appendModule(parentAction: string, segment: string): ModuleBuilder {
-  identifiers.checkModuleSegment(segment);
-
-  return createModuleBuilder(`${parentAction}${constants.MODULE_SEPARATOR}${segment}`);
-}
-
-function createNameBuilder(action: string, name: string): NameBuilder {
-  identifiers.checkName(name);
-
-  const builder = {} as NameBuilder;
-  const scope = { action, name, role: constants.GLOBAL_HOOK_OWNER, builder };
-
-  return Object.assign(builder, {
-    role: createRoleBuilder.bind(null, action, name),
-    grantTo: createGrantBuilder.bind(null, action, name),
-    hook: (registerNameHook<NameBuilder>).bind(null, scope),
-  });
-}
-
-function createRoleBuilder(action: string, name: string, role: string): RoleBuilder {
-  identifiers.checkRole(role);
-
-  const builder = {} as RoleBuilder;
-  const scope = { action, name, role, builder };
-
-  return Object.assign(builder, {
-    registerActions: registerActions.bind(null, scope),
-    hook: (registerNameHook<RoleBuilder>).bind(null, scope),
-  });
-}
-
-function createGrantBuilder(action: string, name: string, permissionId: string): GrantBuilder {
-  const builder = {} as GrantBuilder;
-  const scope = { action, name, permissionId, builder };
-
-  return Object.assign(builder, { registerActions: registerGrant.bind(null, scope) });
-}
-
-function registerActions(scope: NameScope<RoleBuilder>, actions: ActionDefs): RoleBuilder {
-  const currentState = state.getOrCreate();
-
-  state.requireOpen(currentState);
-  requireDeclaredRole(scope.role, currentState.roles);
-
-  if (currentState.modules.get(scope.action)?.names.get(scope.name)?.actions.has(scope.role)) {
-    throw errors.create('DUPLICATE_REGISTRATION', `"${scope.action}::${scope.name}" already has actions registered for role "${scope.role}"`);
-  }
-
-  const registeredActions = definitions.readActions(actions, `${scope.action}::${scope.name} [${scope.role}]`);
-
-  ensureName(currentState, scope.action, scope.name).actions.set(scope.role, registeredActions);
-
-  return scope.builder;
-}
-
-function registerGrant(scope: GrantScope, actions: GrantDefs): GrantBuilder {
-  const currentState = state.getOrCreate();
-
-  state.requireOpen(currentState);
-
-  // The referenced permission need not exist yet: seal() checks it, so grants may
-  // be registered before the module they enable has been imported.
-  const source = identifiers.parse(scope.permissionId, 'INVALID_DEFINITION',
-    `"${scope.action}::${scope.name}": invalid grantTo identifier`,
-  );
-
-  requireDeclaredRole(source.role, currentState.roles);
-
-  if (source.action === scope.action && source.name === scope.name) {
-    throw errors.create('INVALID_DEFINITION', `"${scope.permissionId}" cannot grant to itself`);
-  }
-
-  if (currentState.modules.get(scope.action)?.names.get(scope.name)?.grants.has(scope.permissionId)) {
-    throw errors.create('DUPLICATE_REGISTRATION', `"${scope.action}::${scope.name}" already has a grant for "${scope.permissionId}"`);
-  }
-
-  const grantActions = definitions.readGrant(actions, `${scope.action}::${scope.name} [grantTo ${scope.permissionId}]`);
-
-  ensureName(currentState, scope.action, scope.name).grants.set(scope.permissionId, { source, actions: grantActions });
-
-  return scope.builder;
-}
-
-function registerModuleHook(scope: ModuleScope, method: Method, hook: HookFn): ModuleBuilder {
-  const currentState = state.getOrCreate();
-
-  state.requireOpen(currentState);
-  checkHook(hook, method, scope.action);
-
-  appendHook(ensureModule(currentState, scope.action).hooks, method, hook);
-
-  return scope.builder;
-}
-
-function registerNameHook<Builder>(scope: NameScope<Builder>, method: Method, hook: HookFn): Builder {
-  const currentState = state.getOrCreate();
-
-  state.requireOpen(currentState);
-
-  if (scope.role !== constants.GLOBAL_HOOK_OWNER) requireDeclaredRole(scope.role, currentState.roles);
-
-  checkHook(hook, method, `${scope.action}::${scope.name}`);
-
-  const nameEntry = ensureName(currentState, scope.action, scope.name);
-  const roleHooks = nameEntry.hooks.get(scope.role) ?? new Map<Method, HookFn[]>();
-
-  nameEntry.hooks.set(scope.role, roleHooks);
-
-  appendHook(roleHooks, method, hook);
-
-  return scope.builder;
-}
-
-function checkHook(hook: unknown, method: Method, permissionPath: string): void {
-  definitions.checkMethod(method, 'INVALID_DEFINITION', permissionPath);
-
-  if (typeof hook !== 'function') throw errors.create('INVALID_DEFINITION', `${permissionPath}: hook("${method}") expects a function`);
-}
-
-function requireDeclaredRole(role: string, roles: ReadonlySet<string>): void {
-  if (roles.has(role)) return;
-
-  throw errors.create('ROLE_NOT_DECLARED',
-    `role "${role}" is not declared. Available roles: ${[...roles].join(', ')}.\n` +
-    "Is pkit.context.set('roles', [...]) missing from pkit.config.js, or was it imported after this file?",
-  );
-}
-
-function ensureModule(currentState: State, action: string): ModuleEntry {
-  const registeredModule = currentState.modules.get(action);
-
-  if (registeredModule) return registeredModule;
-
-  const newModule: ModuleEntry = { names: new Map(), hooks: new Map() };
-
-  currentState.modules.set(action, newModule);
-
-  return newModule;
-}
-
-function ensureName(currentState: State, action: string, name: string): NameEntry {
-  const registeredModule = ensureModule(currentState, action);
-  const registeredName = registeredModule.names.get(name);
-
-  if (registeredName) return registeredName;
-
-  const newName: NameEntry = { actions: new Map(), grants: new Map(), hooks: new Map() };
-
-  registeredModule.names.set(name, newName);
-
-  return newName;
-}
-
-function appendHook(methodHooks: Map<Method, HookFn[]>, method: Method, hook: HookFn): void {
-  const hooks = methodHooks.get(method) ?? [];
-
-  methodHooks.set(method, hooks);
-  hooks.push(hook);
-}
-
 export default registry;
+
+function moduleEntry(target: Registry, modulePath: string): ModuleEntry {
+  const existing = target.modules.get(modulePath);
+
+  if (existing !== undefined) return existing;
+
+  const created: ModuleEntry = { names: new Map(), hooks: new Map() };
+
+  target.modules.set(modulePath, created);
+
+  return created;
+}
+
+function nameEntry(target: Registry, modulePath: string, name: string): NameEntry {
+  const owner = moduleEntry(target, modulePath);
+  const existing = owner.names.get(name);
+
+  if (existing !== undefined) return existing;
+
+  const created: NameEntry = { actions: new Map(), grants: new Map(), hooks: new Map(), roleHooks: new Map() };
+
+  owner.names.set(name, created);
+
+  return created;
+}
+
+function checkHook(method: unknown, fn: unknown): { method: Method; fn: HookFn } {
+  if (typeof method !== 'string' || !(constants.METHODS as readonly string[]).includes(method)) {
+    throw errors.create('INVALID_DEFINITION', `Unknown hook method: ${errors.describe(method)}`);
+  }
+
+  if (typeof fn !== 'function') {
+    throw errors.create('INVALID_DEFINITION', `Hook for ${method} must be a function`);
+  }
+
+  return { method: method as Method, fn: fn as HookFn };
+}
+
+function pushHook(hooks: Map<Method, HookFn[]>, method: Method, fn: HookFn): void {
+  const list = hooks.get(method) ?? [];
+
+  hooks.set(method, list);
+  list.push(fn);
+}

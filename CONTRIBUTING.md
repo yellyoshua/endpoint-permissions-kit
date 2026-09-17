@@ -28,7 +28,7 @@ Run `bun run typecheck` and `bun test` before opening a pull request.
 
 ## Conventions
 
-- File names use dash-case (`generate.test.ts`, `audit-fixes.test.ts`).
+- File names use dash-case (`usage-example.test.ts`, `audit-fixes.test.ts`).
 - Functions are declared with `function` at module scope. `tests/architecture.test.ts` rejects arrow functions, function expressions, nested functions and parameter defaults or destructuring in `src/`.
 - No prose comments in code. Only functional directives (`@ts-expect-error`, the executable shebang) are allowed. Explain behavior in `USAGE.md` or the README instead.
 - Tests live in `tests/*.test.ts`. Type contracts (what must and must not compile) live in `tests/typecheck/`.

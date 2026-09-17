@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
-import pkit from '../src/index';
+import { describe, expect, test } from 'bun:test';
+import Pkit from '../src/index';
 import constants from '../src/constants';
 import type { Context, Data, Method, ValidationError } from '../src/types';
-import { resetState } from './helpers';
 
 const STAFF_VAULT = 'staff::vault::all';
 const ADMIN_VAULT = 'admin::vault::all';
@@ -33,29 +32,27 @@ const WRITE_METHODS: Method[] = ['update', 'create', 'remove'];
 const HOOKED_METHODS: Method[] = ['find', 'update', 'create'];
 
 describe('security', () => {
-  beforeEach(resetState);
-
   describe('identity', () => {
     test.each(ALL_METHODS)('denies %s when the identifier belongs to another role', async (method: Method) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method, permissions: [ADMIN_VAULT], data: {} }))).toEqual(['PERMISSION_ROLE_MISMATCH']);
     });
 
     test.each(ALL_METHODS)('denies %s for an unknown role', async (method: Method) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method, role: 'root' as never, data: {} }))).toEqual(['UNKNOWN_ROLE']);
     });
 
     test.each(ALL_METHODS)('denies %s without assignments', async (method: Method) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method, permissions: [], data: {} }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
     });
 
     test.each(ALL_METHODS)('denies %s for an identifier that is not assignable', async (method: Method) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method, permissions: ['staff::vault::retired'], data: {} }))).toEqual(['UNKNOWN_PERMISSION']);
     });
@@ -63,7 +60,7 @@ describe('security', () => {
     test.each([
       'staff::vault', 'staff::vault::all::extra', '::vault::all', 'staff::::all', 'staff::vault::*', ' staff::vault::all', 'staff::vault::all ',
     ])('denies a malformed identifier %p', async (permissionId: string) => {
-      setupVault();
+      const pkit = setupVault();
 
       const validation = await pkit.validate({ ...staffVault, method: 'find', permissions: [permissionId], data: {} });
 
@@ -72,13 +69,13 @@ describe('security', () => {
     });
 
     test('denies the whole request when one stored identifier is stale', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method: 'find', permissions: [STAFF_VAULT, 'staff::vault::removed'], data: {} }))).toEqual(['UNKNOWN_PERMISSION']);
     });
 
     test('never lets an assignment of one module reach another module', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, action: 'audit', method: 'find', data: {} }))).toEqual(['PERMISSION_NOT_ASSIGNED']);
     });
@@ -86,13 +83,13 @@ describe('security', () => {
 
   describe('method isolation', () => {
     test('keeps a disabled method denied even with allowed data', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method: 'remove', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
     });
 
     test.each(WRITE_METHODS)('does not let a find grant enable %s', async (method: Method) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffAudit, method, permissions: [STAFF_AUDIT], data: {} }))).toEqual(['METHOD_DISABLED']);
     });
@@ -100,7 +97,7 @@ describe('security', () => {
     test('denies the method before the properties and before the hooks', async () => {
       const executedHooks: string[] = [];
 
-      setupVault(false, executedHooks);
+      const pkit = setupVault(false, executedHooks);
 
       const validation = await pkit.validate({ ...staffVault, method: 'remove', data: { id: 1, secret: 's' } });
 
@@ -109,7 +106,7 @@ describe('security', () => {
     });
 
     test('keeps the methods of one role out of another role', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect((await pkit.validate({ ...adminVault, method: 'remove', data: { id: 1 } })).errors).toEqual([]);
       expect(codesOf(await pkit.validate({ ...staffVault, method: 'remove', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
@@ -122,52 +119,52 @@ describe('security', () => {
       { method: 'update' as Method, data: { name: 'x', role: 'admin' }, fields: ['role'] },
       { method: 'create' as Method, data: { name: 'x', owner: 2 }, fields: ['owner'] },
     ])('denies $method with the exact forbidden fields', async ({ method, data, fields }: { method: Method; data: Data; fields: readonly string[] }) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method, data }))).toEqual(fields);
     });
 
     test('denies a remove that carries more than the allowed key', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...adminVault, method: 'remove', data: { id: 1, cascade: true } }))).toEqual(['cascade']);
     });
 
     test('is case sensitive', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { Name: 'x' } }))).toEqual(['Name']);
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { NAME: 'x' } }))).toEqual(['NAME']);
     });
 
     test('does not let a literal dotted key impersonate a nested path', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect((await pkit.validate({ ...staffVault, method: 'update', data: { profile: { email: 'a@b.c' } } })).errors).toEqual([]);
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { 'profile.email': 'a@b.c' } }))).toEqual(['profile.email']);
     });
 
     test('does not let a bracket in a key impersonate an array path', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { 'name[0]': 'x' } }))).toEqual(['name[0]']);
     });
 
     test('does not let a wildcard key match itself as a pattern', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { '*': 'x' } }))).toEqual(['*']);
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { profile: { '*': 'x' } } }))).toEqual(['profile.*']);
     });
 
     test('denies a sibling of an allowed nested path', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { profile: { role: 'admin' } } }))).toEqual(['profile.role']);
     });
 
     test('denies a prototype payload without polluting anything', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       const payload: Data = JSON.parse('{"__proto__":{"polluted":true},"name":"x"}');
       const validation = await pkit.validate({ ...staffVault, method: 'update', data: payload });
@@ -177,20 +174,20 @@ describe('security', () => {
     });
 
     test('denies constructor and prototype keys like any other key', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { constructor: 'x' } }))).toEqual(['constructor']);
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { prototype: 'x' } }))).toEqual(['prototype']);
     });
 
     test('reports a forbidden key inside an array once', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(fieldsOf(await pkit.validate({ ...staffVault, method: 'update', data: { items: [{ secret: 'a' }, { secret: 'b' }] } }))).toEqual(['items.secret']);
     });
 
     test('compares the keys of a null prototype object', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       const payload = Object.assign(Object.create(null), { name: 'x', secret: 's' }) as Data;
 
@@ -198,7 +195,7 @@ describe('security', () => {
     });
 
     test('denies a key whose only leaves are cycles', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       const payload: Data = { name: 'x' };
       const cycle: Data = {};
@@ -210,7 +207,7 @@ describe('security', () => {
     });
 
     test('denies a key that points back at the request data', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       const payload: Data = { name: 'x' };
 
@@ -229,7 +226,7 @@ describe('security', () => {
       { method: 'update' as Method, data: { name: 'x', role: 'admin' }, cropped: { name: 'x' } },
       { method: 'create' as Method, data: { name: 'x', owner: 2 }, cropped: { name: 'x' } },
     ])('crops $method to the permission', async ({ method, data, cropped }: { method: Method; data: Data; cropped: Data }) => {
-      setupVault(true);
+      const pkit = setupVault(true);
 
       const validation = await pkit.validate({ ...staffVault, method, data });
 
@@ -238,7 +235,7 @@ describe('security', () => {
     });
 
     test('never returns a key outside the permission for a hostile payload', async () => {
-      setupVault(true);
+      const pkit = setupVault(true);
 
       const payload: Data = JSON.parse('{"__proto__":{"polluted":true},"name":"x","role":"admin","profile":{"email":"a@b.c","role":"admin"}}');
       const validation = await pkit.validate({ ...staffVault, method: 'update', data: payload });
@@ -249,7 +246,7 @@ describe('security', () => {
     });
 
     test('does not mutate the request data, including nested containers', async () => {
-      setupVault(true);
+      const pkit = setupVault(true);
 
       const profile = { email: 'a@b.c', role: 'admin' };
       const data: Data = { name: 'x', role: 'admin', profile, items: [{ secret: 's' }] };
@@ -263,7 +260,7 @@ describe('security', () => {
     test('hands the hooks the cropped data on every method', async () => {
       const capturedData: Data[] = [];
 
-      setupVault(true, undefined, capturedData);
+      const pkit = setupVault(true, undefined, capturedData);
 
       await pkit.validate({ ...staffVault, method: 'find', data: { id: 1, secret: 's' } });
       await pkit.validate({ ...staffVault, method: 'update', data: { name: 'x', role: 'admin' } });
@@ -273,33 +270,28 @@ describe('security', () => {
     });
 
     test('does not turn a disabled method into an allowed one', async () => {
-      setupVault(true);
+      const pkit = setupVault(true);
 
       expect(codesOf(await pkit.validate({ ...staffVault, method: 'remove', data: { id: 1 } }))).toEqual(['METHOD_DISABLED']);
     });
 
-    test('cannot be switched on after seal', () => {
-      setupVault();
-
-      expect(pkit.context.set.bind(null, 'cropper', true)).toThrow(/pkit.seal\(\) was already called/);
-    });
   });
 
   describe('hostile input shapes', () => {
     test.each([{ data: null }, { data: 'x' }, { data: 7 }, { data: [] }, { data: true }])('refuses data %j instead of coercing it', async ({ data }: { data: unknown }) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method: 'update', data } as never))).toEqual(['INVALID_INPUT']);
     });
 
     test.each([{ context: null }, { context: 'x' }, { context: [] }])('refuses context %j instead of coercing it', async ({ context }: { context: unknown }) => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, method: 'find', context } as never))).toEqual(['INVALID_INPUT']);
     });
 
     test('never succeeds when reading the data throws', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       const data: Data = { name: 'x' };
 
@@ -312,7 +304,7 @@ describe('security', () => {
     });
 
     test('never succeeds on a payload too deep to walk', async () => {
-      setupVault(true);
+      const pkit = setupVault(true);
 
       const validation = await pkit.validate({ ...staffVault, method: 'update', data: { name: 'x', deep: deepPayload(20000) } });
 
@@ -321,7 +313,7 @@ describe('security', () => {
     });
 
     test('rejects a method that is not one of the four', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       for (const method of ['delete', 'list', '__proto__', 'constructor', 'FIND', '']) {
         expect(codesOf(await pkit.validate({ ...staffVault, method, data: {} } as never))).toEqual(['INVALID_INPUT']);
@@ -329,7 +321,7 @@ describe('security', () => {
     });
 
     test('rejects an unregistered module without leaking which one exists', async () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(codesOf(await pkit.validate({ ...staffVault, action: 'ghost', method: 'find', data: {} }))).toEqual(['UNKNOWN_ACTION']);
     });
@@ -337,8 +329,7 @@ describe('security', () => {
 
   describe('hooks', () => {
     test.each(HOOKED_METHODS)('denies %s when a hook fails', async (method: Method) => {
-      resetState();
-      pkit.context.set('roles', ['staff']);
+      const pkit = new Pkit({ roles: ['staff'] });
 
       const vault = pkit.module('vault').name('all');
 
@@ -348,7 +339,6 @@ describe('security', () => {
         create: { enabled: true, properties: ['id'] },
       });
       vault.hook(method, throwOnRead);
-      pkit.seal();
 
       const validation = await pkit.validate({ ...staffVault, method, data: { id: 1 } });
 
@@ -357,12 +347,10 @@ describe('security', () => {
     });
 
     test('ignores what a hook returns, including false', async () => {
-      resetState();
-      pkit.context.set('roles', ['staff']);
+      const pkit = new Pkit({ roles: ['staff'] });
       pkit.module('vault').name('all').role('staff')
         .registerActions({ find: { enabled: true, properties: ['id'] } })
         .hook('find', returnFalse);
-      pkit.seal();
 
       expect((await pkit.validate({ ...staffVault, method: 'find', data: { id: 1 } })).errors).toEqual([]);
     });
@@ -370,7 +358,7 @@ describe('security', () => {
     test('never runs a hook when the properties are denied', async () => {
       const executedHooks: string[] = [];
 
-      setupVault(false, executedHooks);
+      const pkit = setupVault(false, executedHooks);
 
       await pkit.validate({ ...staffVault, method: 'update', data: { role: 'admin' } });
 
@@ -380,7 +368,7 @@ describe('security', () => {
     test('hands the hook the identifiers of the caller, not the resolved permission', async () => {
       const capturedPermissions: (readonly string[])[] = [];
 
-      setupVault(false, undefined, undefined, capturedPermissions);
+      const pkit = setupVault(false, undefined, undefined, capturedPermissions);
 
       await pkit.validate({ ...staffAudit, method: 'find', data: { id: 1 } });
 
@@ -393,8 +381,7 @@ describe('security', () => {
       { properties: ['*'] }, { properties: ['*.name'] }, { properties: ['*.*'] }, { properties: ['name[0]'] },
       { properties: ['name..first'] }, { properties: ['name.'] }, { properties: ['.name'] }, { properties: ['id', 'id'] }, { properties: [''] },
     ])('refuses to register properties $properties', ({ properties }: { properties: readonly string[] }) => {
-      resetState();
-      pkit.context.set('roles', ['staff']);
+      const pkit = new Pkit({ roles: ['staff'] });
 
       const builder = pkit.module('vault').name('all').role('staff');
 
@@ -402,47 +389,29 @@ describe('security', () => {
     });
 
     test('refuses a grant that is wider than a grant may be', () => {
-      resetState();
-      pkit.context.set('roles', ['staff']);
+      const pkit = new Pkit({ roles: ['staff'] });
 
       const vault = pkit.module('vault').name('all');
 
-      expect(vault.grantTo(STAFF_AUDIT).registerActions.bind(null, { find: { enabled: true, properties: '*' } as never })).toThrow(/explicit properties list/);
-      expect(vault.grantTo('staff::other::all').registerActions.bind(null, { find: { enabled: false, properties: ['id'] } as never })).toThrow(/enabled: false/);
-      expect(vault.grantTo(STAFF_VAULT).registerActions.bind(null, { find: { enabled: true, properties: ['id'] } })).toThrow(/cannot grant to itself/);
+      expect(vault.grantTo(STAFF_AUDIT).registerActions.bind(null, { find: { enabled: true, properties: '*' } as never })).toThrow(/list its properties explicitly/);
+      expect(vault.grantTo('staff::other::all').registerActions.bind(null, { find: { enabled: false, properties: ['id'] } as never })).toThrow(/must be enabled/);
+      expect(vault.grantTo(STAFF_VAULT).registerActions.bind(null, { find: { enabled: true, properties: ['id'] } })).toThrow(/references its own permission/);
     });
 
     test('refuses reserved role and name segments', () => {
-      resetState();
-      pkit.context.set('roles', ['staff']);
+      const pkit = new Pkit({ roles: ['staff'] });
 
-      expect(pkit.module('vault').name.bind(null, '*')).toThrow(/reserved/);
-      expect(pkit.module('vault').name('all').role.bind(null, '*' as never)).toThrow(/reserved for global hooks/);
+      expect(pkit.module('vault').name.bind(null, '*')).toThrow(expect.objectContaining({ code: 'INVALID_DEFINITION' }));
+      expect(pkit.module('vault').name('all').role.bind(null, '*' as never)).toThrow(expect.objectContaining({ code: 'INVALID_DEFINITION' }));
       expect(pkit.context.set.bind(null, 'roles', ['*'])).toThrow(expect.objectContaining({ code: 'INVALID_DEFINITION' }));
     });
 
-    test('refuses every registration after seal', () => {
-      setupVault();
 
-      const vault = pkit.module('vault').name('all');
-
-      expect(vault.role('staff').registerActions.bind(null, { find: { enabled: true, properties: ['id'] } })).toThrow(/already called/);
-      expect(vault.hook.bind(null, 'find', returnFalse)).toThrow(/already called/);
-      expect(pkit.context.set.bind(null, 'roles', ['staff'])).toThrow(/already called/);
-    });
-
-    test('refuses to validate before seal', async () => {
-      resetState();
-      pkit.context.set('roles', ['staff']);
-      pkit.module('vault').name('all').role('staff').registerActions({ find: { enabled: true, properties: ['id'] } });
-
-      expect(codesOf(await pkit.validate({ ...staffVault, method: 'find', data: {} }))).toEqual(['NOT_SEALED']);
-    });
   });
 
   describe('name resolution', () => {
     test('denies the request when two assigned names share the module', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const validation = await pkit.validate({
         action: STUDENTS, method: 'find', role: 'staff', permissions: [STUDENTS_ALL, STUDENTS_ONLY_RELATED],
@@ -453,7 +422,7 @@ describe('security', () => {
     });
 
     test('denies a request for another module when the assignments are ambiguous', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const validation = await pkit.validate({
         action: GRADES, method: 'find', role: 'staff', permissions: [GRADES_ALL, STUDENTS_ALL, STUDENTS_ONLY_RELATED],
@@ -464,7 +433,7 @@ describe('security', () => {
     });
 
     test('never lets a submodule identifier resolve its parent module', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const validation = await pkit.validate({ action: STUDENTS, method: 'find', role: 'staff', permissions: [GRADES_ALL] });
 
@@ -473,7 +442,7 @@ describe('security', () => {
     });
 
     test('never lets a parent module identifier resolve its submodule', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const validation = await pkit.validate({ action: GRADES, method: 'find', role: 'staff', permissions: [STUDENTS_ALL] });
 
@@ -482,7 +451,7 @@ describe('security', () => {
     });
 
     test('never lets a module resolve another whose name is its textual prefix', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const validation = await pkit.validate({ action: STUDENT, method: 'find', role: 'staff', permissions: [STUDENTS_ALL] });
 
@@ -491,7 +460,7 @@ describe('security', () => {
     });
 
     test('resolves the variant the user holds, with its own methods', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const all = { action: STUDENTS, role: 'staff', permissions: [STUDENTS_ALL] } as const;
       const readOnly = { action: STUDENTS, role: 'staff', permissions: [STUDENTS_READ_ONLY] } as const;
@@ -505,7 +474,7 @@ describe('security', () => {
     });
 
     test('denies the module when no name is assigned and no grant reaches one', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const validation = await pkit.validate({ action: STUDENTS, method: 'find', role: 'staff', permissions: [] });
 
@@ -514,7 +483,7 @@ describe('security', () => {
     });
 
     test('falls back to the only name a grant reaches', async () => {
-      setupSingleGrant();
+      const pkit = setupSingleGrant();
 
       const validation = await pkit.validate({ action: 'library', method: 'find', role: 'staff', permissions: [STAFF_AUDIT], data: { id: 1 } });
 
@@ -523,7 +492,7 @@ describe('security', () => {
     });
 
     test('denies the module when grants reach two names of it', async () => {
-      setupAmbiguousGrant();
+      const pkit = setupAmbiguousGrant();
 
       const validation = await pkit.validate({ action: 'library', method: 'find', role: 'staff', permissions: [STAFF_AUDIT], data: { id: 1 } });
 
@@ -532,7 +501,7 @@ describe('security', () => {
     });
 
     test('resolves forUser to the same name validate resolves', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const identity = { role: 'staff', permissions: [STUDENTS_READ_ONLY] } as const;
       const access = pkit.permissions.forUser(identity);
@@ -543,7 +512,7 @@ describe('security', () => {
     });
 
     test('throws the ambiguity from forUser that validate reports as an error', async () => {
-      setupStudents();
+      const pkit = setupStudents();
 
       const identity = { role: 'staff', permissions: [STUDENTS_ALL, STUDENTS_ONLY_RELATED] } as const;
 
@@ -552,7 +521,7 @@ describe('security', () => {
     });
 
     test('throws the grant ambiguity from forUser as well', () => {
-      setupAmbiguousGrant();
+      const pkit = setupAmbiguousGrant();
 
       expect(pkit.permissions.forUser.bind(null, { role: 'staff', permissions: [STAFF_AUDIT] })).toThrow(expect.objectContaining({ code: 'AMBIGUOUS_PERMISSION' }));
     });
@@ -560,7 +529,7 @@ describe('security', () => {
 
   describe('views', () => {
     test('never exposes an identifier of another role to forUser', () => {
-      setupVault();
+      const pkit = setupVault();
 
       const access = pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_VAULT] });
 
@@ -569,32 +538,30 @@ describe('security', () => {
     });
 
     test('applies the same identity rules as validate', () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(pkit.permissions.forUser.bind(null, { role: 'staff', permissions: [ADMIN_VAULT] })).toThrow(expect.objectContaining({ code: 'PERMISSION_ROLE_MISMATCH' }));
       expect(pkit.permissions.forUser.bind(null, { role: 'root' as never, permissions: [] })).toThrow(expect.objectContaining({ code: 'UNKNOWN_ROLE' }));
     });
 
     test('reports a disabled method as false instead of hiding the target', () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_VAULT] })[STAFF_VAULT]).toEqual({ find: true, update: true, create: true, remove: false });
     });
 
     test('freezes the catalog and the views', () => {
-      setupVault();
+      const pkit = setupVault();
 
       expect(Object.isFrozen(pkit.permissions.named)).toBe(true);
       expect(Object.isFrozen(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_VAULT] }))).toBe(true);
       expect(Object.isFrozen(pkit.context)).toBe(true);
-      expect(Object.isFrozen(pkit)).toBe(true);
     });
   });
 });
 
-function setupStudents(): void {
-  resetState();
-  pkit.context.set('roles', ['admin', 'staff']);
+function setupStudents() {
+  const pkit = new Pkit({ roles: ['admin', 'staff'] });
 
   const students = pkit.module('management').module('students');
 
@@ -621,12 +588,12 @@ function setupStudents(): void {
     find: { enabled: true, properties: '*' },
   });
 
-  pkit.seal();
+
+  return pkit;
 }
 
-function setupSingleGrant(): void {
-  resetState();
-  pkit.context.set('roles', ['admin', 'staff']);
+function setupSingleGrant() {
+  const pkit = new Pkit({ roles: ['admin', 'staff'] });
 
   const library = pkit.module('library');
 
@@ -637,12 +604,12 @@ function setupSingleGrant(): void {
 
   library.name('all').grantTo(STAFF_AUDIT).registerActions({ find: { enabled: true, properties: ['id'] } });
 
-  pkit.seal();
+
+  return pkit;
 }
 
-function setupAmbiguousGrant(): void {
-  resetState();
-  pkit.context.set('roles', ['admin', 'staff']);
+function setupAmbiguousGrant() {
+  const pkit = new Pkit({ roles: ['admin', 'staff'] });
 
   const library = pkit.module('library');
 
@@ -654,12 +621,12 @@ function setupAmbiguousGrant(): void {
   library.name('all').grantTo(STAFF_AUDIT).registerActions({ find: { enabled: true, properties: ['id'] } });
   library.name('restricted').grantTo(STAFF_AUDIT).registerActions({ find: { enabled: true, properties: ['id'] } });
 
-  pkit.seal();
+
+  return pkit;
 }
 
-function setupVault(cropper?: boolean, executedHooks?: string[], capturedData?: Data[], capturedPermissions?: (readonly string[])[]): void {
-  resetState();
-  pkit.context.set('roles', ['admin', 'staff', 'public']);
+function setupVault(cropper?: boolean, executedHooks?: string[], capturedData?: Data[], capturedPermissions?: (readonly string[])[]) {
+  const pkit = new Pkit({ roles: ['admin', 'staff', 'public'] });
 
   if (cropper === true) pkit.context.set('cropper', true);
 
@@ -690,7 +657,7 @@ function setupVault(cropper?: boolean, executedHooks?: string[], capturedData?: 
     if (capturedPermissions) vault.hook(method, capturePermissions.bind(null, capturedPermissions));
   }
 
-  pkit.seal();
+  return pkit;
 }
 
 function codesOf(validation: { errors: readonly ValidationError[] }): string[] {

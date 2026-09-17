@@ -1,16 +1,12 @@
 import type constants from './constants';
 
-export interface RoleRegistry {
-  general: true;
-}
-
-export type Role = keyof RoleRegistry & string;
+export type Role<R extends string = string> = R;
 
 export type Method = (typeof constants.METHODS)[number];
 
 export type Properties = readonly string[] | typeof constants.ALL_FIELDS;
 
-export type PermissionId = `${Role}::${string}::${string}`;
+export type PermissionId<R extends string = string> = `${R}::${string}::${string}`;
 
 export interface ActionDef {
   enabled: boolean;
@@ -38,6 +34,12 @@ export type ContextValues = {
 
 export type ContextKey = keyof ContextValues;
 
+export interface PkitOptions<R extends string> {
+  roles?: readonly R[];
+  cropper?: boolean;
+  reservedFields?: readonly string[];
+}
+
 export type HookFn = (data: Data, context: Context, permissions: readonly string[]) => unknown;
 
 export type ValidationError =
@@ -57,8 +59,6 @@ export type PkitErrorCode =
   | 'DUPLICATE_REGISTRATION'
   | 'INVALID_DEFINITION'
   | 'INVALID_INPUT'
-  | 'SEALED'
-  | 'NOT_SEALED'
   | 'UNKNOWN_ROLE'
   | 'UNKNOWN_ACTION'
   | 'UNKNOWN_PERMISSION'
@@ -68,12 +68,12 @@ export type PkitErrorCode =
   | 'METHOD_DISABLED'
   | 'PROPERTIES_NOT_ALLOWED';
 
-export interface UserAssignments {
-  role: Role;
+export interface UserAssignments<R extends string = string> {
+  role: Role<R>;
   permissions: readonly string[];
 }
 
-export interface ValidateInput extends UserAssignments {
+export interface ValidateInput<R extends string = string> extends UserAssignments<R> {
   action: string;
   method: Method;
   data?: Data;
@@ -90,8 +90,8 @@ export type ValidateResult =
 
 export type PermissionEntry = Readonly<ActionDef>;
 
-export type NamedPermissionCatalog = Readonly<Record<PermissionId, Readonly<Partial<Record<Method, PermissionEntry>>>>>;
+export type NamedPermissionCatalog<R extends string = string> = Readonly<Record<PermissionId<R>, Readonly<Partial<Record<Method, PermissionEntry>>>>>;
 
 export type MethodAccessMap = Readonly<Record<Method, boolean>>;
 
-export type UserPermissionMap = Readonly<Record<PermissionId, MethodAccessMap>>;
+export type UserPermissionMap<R extends string = string> = Readonly<Record<PermissionId<R>, MethodAccessMap>>;

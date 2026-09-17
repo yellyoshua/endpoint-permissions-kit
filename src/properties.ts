@@ -1,99 +1,69 @@
-import constants from './constants';
-import errors from './errors';
 import type { Data, Properties } from './types';
+import constants from './constants';
 
 const PRUNED = Symbol('pruned');
 
-const MAX_DEPTH = 1000;
-
-type PathPattern = readonly string[];
-
 interface Walk {
-  readonly patterns: readonly PathPattern[];
+  readonly patterns: readonly (readonly string[])[];
   readonly segments: string[];
   readonly ancestors: Set<object>;
 }
 
 const properties = {
-  checkDeclaredPath(property: string, permissionPath: string): void {
-    if (property.includes('[') || property.includes(']')) {
-      throw errors.create('INVALID_DEFINITION', `${permissionPath}: array indexes are not allowed in properties: "${property}"`);
+  deny(data: Data, allowed: Properties, reserved: readonly string[]): readonly string[] {
+    if (allowed === constants.ALL_FIELDS) return Object.freeze([]);
+
+    const walk = createWalk(data, allowed, reserved);
+    const denied = new Set<string>();
+
+    for (const key of Object.keys(data)) {
+      walk.segments.push(key);
+      collectDenied(data[key], walk, denied);
+      walk.segments.pop();
     }
 
-    const segments = segmentsOf(property);
-
-    for (const segment of segments) {
-      if (segment.length === 0) throw errors.create('INVALID_DEFINITION', `${permissionPath}: empty segment in property path: "${property}"`);
-    }
-
-    if (segments[0] === constants.ALL_FIELDS) {
-      throw errors.create('INVALID_DEFINITION', `${permissionPath}: a property path cannot start with "${constants.ALL_FIELDS}": "${property}"`);
-    }
+    return Object.freeze([...denied]);
   },
 
-  resolve(data: Data, allowed: Properties, reserved: readonly string[], cropper: boolean): Data {
+  crop(data: Data, allowed: Properties, reserved: readonly string[]): Data {
     if (allowed === constants.ALL_FIELDS) return data;
 
-    const patterns: PathPattern[] = [];
+    const walk = createWalk(data, allowed, reserved);
+    const cropped: Data = {};
 
-    for (const pattern of allowed.concat(reserved)) patterns.push(segmentsOf(pattern));
+    for (const key of Object.keys(data)) {
+      walk.segments.push(key);
 
-    const walk: Walk = { patterns, segments: [], ancestors: new Set([data]) };
+      const value = cropValue(data[key], walk);
 
-    if (cropper) return cropData(data, walk);
+      walk.segments.pop();
 
-    rejectForbiddenPaths(data, walk);
+      if (value !== PRUNED) setField(cropped, key, value);
+    }
 
-    return data;
+    return cropped;
   },
 };
 
-function segmentsOf(path: string): readonly string[] {
-  const segments: string[] = [];
+export default properties;
 
-  let segment = '';
+function createWalk(data: Data, allowed: readonly string[], reserved: readonly string[]): Walk {
+  const patterns: (readonly string[])[] = [];
 
-  let index = 0;
+  for (const path of allowed) patterns.push(path.split(constants.MODULE_SEPARATOR));
+  for (const path of reserved) patterns.push(path.split(constants.MODULE_SEPARATOR));
 
-  while (index < path.length) {
-    const character = path[index] as string;
-
-    if (character === '\\') {
-      segment += path[index + 1] ?? '';
-      index += 2;
-
-      continue;
-    }
-
-    if (character === '.') {
-      segments.push(segment);
-
-      segment = '';
-      index += 1;
-
-      continue;
-    }
-
-    segment += character;
-    index += 1;
-  }
-
-  segments.push(segment);
-
-  return segments;
+  return { patterns, segments: [], ancestors: new Set([data]) };
 }
 
-function isAllowedPath(segments: readonly string[], patterns: readonly PathPattern[]): boolean {
-  for (const pattern of patterns) {
-    if (pattern.length !== segments.length) continue;
+function isAllowed(walk: Walk): boolean {
+  for (const pattern of walk.patterns) {
+    if (pattern.length !== walk.segments.length) continue;
 
     let isMatch = true;
 
-    for (let index = 0; index < segments.length; index += 1) {
-      const patternSegment = pattern[index];
-
-      if (patternSegment === constants.ALL_FIELDS) continue;
-      if (patternSegment === segments[index]) continue;
+    for (let index = 0; index < pattern.length; index += 1) {
+      if (pattern[index] === constants.ALL_FIELDS || pattern[index] === walk.segments[index]) continue;
 
       isMatch = false;
 
@@ -106,7 +76,7 @@ function isAllowedPath(segments: readonly string[], patterns: readonly PathPatte
   return false;
 }
 
-function isPlainObject(value: unknown): boolean {
+function isPlainObject(value: unknown): value is Data {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
 
   const prototype: unknown = Object.getPrototypeOf(value);
@@ -114,10 +84,10 @@ function isPlainObject(value: unknown): boolean {
   return prototype === Object.prototype || prototype === null;
 }
 
-function requireDepth(walk: Walk): void {
-  if (walk.ancestors.size < MAX_DEPTH) return;
+function enter(container: object, walk: Walk): void {
+  if (walk.ancestors.size >= constants.MAX_DEPTH) throw new RangeError(`data is nested deeper than ${constants.MAX_DEPTH} levels`);
 
-  throw new RangeError(`data is nested deeper than ${MAX_DEPTH} levels`);
+  walk.ancestors.add(container);
 }
 
 function setField(target: Data, key: string, value: unknown): void {
@@ -130,24 +100,58 @@ function setField(target: Data, key: string, value: unknown): void {
   target[key] = value;
 }
 
+function collectDenied(value: unknown, walk: Walk, denied: Set<string>): void {
+  if (Array.isArray(value)) {
+    if (value.length === 0 || walk.ancestors.has(value)) return reportLeaf(walk, denied);
+
+    enter(value, walk);
+
+    for (const item of value) collectDenied(item, walk, denied);
+
+    walk.ancestors.delete(value);
+
+    return;
+  }
+
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value);
+
+    if (keys.length === 0 || walk.ancestors.has(value)) return reportLeaf(walk, denied);
+
+    enter(value, walk);
+
+    for (const key of keys) {
+      walk.segments.push(key);
+      collectDenied(value[key], walk, denied);
+      walk.segments.pop();
+    }
+
+    walk.ancestors.delete(value);
+
+    return;
+  }
+
+  reportLeaf(walk, denied);
+}
+
+function reportLeaf(walk: Walk, denied: Set<string>): void {
+  if (!isAllowed(walk)) denied.add(walk.segments.join(constants.MODULE_SEPARATOR));
+}
+
 function cropValue(value: unknown, walk: Walk): unknown {
   if (Array.isArray(value)) {
-    if (value.length === 0) return isAllowedPath(walk.segments, walk.patterns) ? [] : PRUNED;
+    if (value.length === 0) return isAllowed(walk) ? [] : PRUNED;
 
     if (walk.ancestors.has(value)) throw new RangeError('data contains a circular reference');
 
-    requireDepth(walk);
-
-    walk.ancestors.add(value);
+    enter(value, walk);
 
     const items: unknown[] = [];
 
     for (const item of value) {
-      const croppedItem = cropValue(item, walk);
+      const cropped = cropValue(item, walk);
 
-      if (croppedItem === PRUNED) continue;
-
-      items.push(croppedItem);
+      if (cropped !== PRUNED) items.push(cropped);
     }
 
     walk.ancestors.delete(value);
@@ -156,136 +160,35 @@ function cropValue(value: unknown, walk: Walk): unknown {
   }
 
   if (isPlainObject(value)) {
-    const container = value as Data;
+    const keys = Object.keys(value);
 
-    const keys = Object.keys(container);
+    if (keys.length === 0) return isAllowed(walk) ? {} : PRUNED;
 
-    if (keys.length === 0) return isAllowedPath(walk.segments, walk.patterns) ? {} : PRUNED;
+    if (walk.ancestors.has(value)) throw new RangeError('data contains a circular reference');
 
-    if (walk.ancestors.has(container)) throw new RangeError('data contains a circular reference');
-
-    requireDepth(walk);
-
-    walk.ancestors.add(container);
+    enter(value, walk);
 
     const cropped: Data = {};
 
-    let keptCount = 0;
+    let kept = 0;
 
     for (const key of keys) {
       walk.segments.push(key);
 
-      const croppedValue = cropValue(container[key], walk);
+      const croppedValue = cropValue(value[key], walk);
 
       walk.segments.pop();
 
       if (croppedValue === PRUNED) continue;
 
       setField(cropped, key, croppedValue);
-
-      keptCount += 1;
+      kept += 1;
     }
-
-    walk.ancestors.delete(container);
-
-    return keptCount === 0 ? PRUNED : cropped;
-  }
-
-  return isAllowedPath(walk.segments, walk.patterns) ? value : PRUNED;
-}
-
-function cropData(data: Data, walk: Walk): Data {
-  const cropped: Data = {};
-
-  for (const key of Object.keys(data)) {
-    walk.segments.push(key);
-
-    const croppedValue = cropValue(data[key], walk);
-
-    walk.segments.pop();
-
-    if (croppedValue === PRUNED) continue;
-
-    setField(cropped, key, croppedValue);
-  }
-
-  return cropped;
-}
-
-function collectForbiddenPaths(value: unknown, walk: Walk, forbidden: Set<string>): void {
-  if (Array.isArray(value)) {
-    if (value.length === 0 || walk.ancestors.has(value)) {
-      reportPath(walk, forbidden);
-
-      return;
-    }
-
-    requireDepth(walk);
-
-    walk.ancestors.add(value);
-
-    for (const item of value) collectForbiddenPaths(item, walk, forbidden);
 
     walk.ancestors.delete(value);
 
-    return;
+    return kept === 0 ? PRUNED : cropped;
   }
 
-  if (isPlainObject(value)) {
-    const container = value as Data;
-
-    const keys = Object.keys(container);
-
-    if (keys.length === 0 || walk.ancestors.has(container)) {
-      reportPath(walk, forbidden);
-
-      return;
-    }
-
-    requireDepth(walk);
-
-    walk.ancestors.add(container);
-
-    for (const key of keys) {
-      walk.segments.push(key);
-
-      collectForbiddenPaths(container[key], walk, forbidden);
-
-      walk.segments.pop();
-    }
-
-    walk.ancestors.delete(container);
-
-    return;
-  }
-
-  reportPath(walk, forbidden);
+  return isAllowed(walk) ? value : PRUNED;
 }
-
-function reportPath(walk: Walk, forbidden: Set<string>): void {
-  if (isAllowedPath(walk.segments, walk.patterns)) return;
-
-  forbidden.add(walk.segments.join('.'));
-}
-
-function rejectForbiddenPaths(data: Data, walk: Walk): void {
-  const forbidden = new Set<string>();
-
-  for (const key of Object.keys(data)) {
-    walk.segments.push(key);
-
-    collectForbiddenPaths(data[key], walk, forbidden);
-
-    walk.segments.pop();
-  }
-
-  if (forbidden.size === 0) return;
-
-  const fields = [...forbidden];
-
-  const error = errors.create('PROPERTIES_NOT_ALLOWED', `fields not allowed: ${fields.join(', ')}`);
-
-  throw Object.assign(error, { fields });
-}
-
-export default properties;

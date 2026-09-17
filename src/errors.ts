@@ -5,6 +5,10 @@ const errors = {
     return Object.assign(new Error(message), { name: 'PkitError' as const, code });
   },
 
+  isPkitError(value: unknown): value is Error & { name: 'PkitError'; code: PkitErrorCode } {
+    return value instanceof Error && value.name === 'PkitError' && typeof (value as { code?: unknown }).code === 'string';
+  },
+
   /**
    * Renders an untrusted value for an error message.
    * A value with no reachable `toString`, such as `Object.create(null)`, makes

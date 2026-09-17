@@ -1,99 +1,118 @@
+import type { ActionDef, ActionDefs, GrantDef, GrantDefs, Method } from './types';
 import constants from './constants';
 import errors from './errors';
-import properties from './properties';
-import type { ActionDef, ActionDefs, GrantDefs, Method, PkitErrorCode } from './types';
-
-const METHODS: ReadonlySet<string> = new Set<string>(constants.METHODS);
 
 const definitions = {
-  checkMethod(method: unknown, code: PkitErrorCode, subject: string): Method {
-    if (typeof method === 'string' && METHODS.has(method)) return method as Method;
+  readActions(literal: unknown): ActionDefs {
+    const source = readLiteral(literal);
+    const actions: Record<string, ActionDef> = {};
 
-    throw errors.create(code, `${subject}: method "${errors.describe(method)}" does not exist. Methods: ${constants.METHODS.join(', ')}`);
-  },
+    for (const method of methodsOf(source)) {
+      const entry = source[method];
 
-  /**
-   * Reads a whole `registerActions` literal and returns a frozen copy, so a later
-   * mutation of the object the consumer passed cannot change what was registered.
-   */
-  readActions(actions: unknown, permissionPath: string): ActionDefs {
-    const declared = requireObject(actions, `${permissionPath}: registerActions expects an object`);
-    const registeredActions: ActionDefs = Object.create(null);
-
-    for (const [method, definition] of Object.entries(declared)) {
-      definitions.checkMethod(method, 'INVALID_DEFINITION', permissionPath);
-
-      registeredActions[method as Method] = readActionDefinition(definition, `${permissionPath}.${method}`);
-    }
-
-    return Object.freeze(registeredActions);
-  },
-
-  /**
-   * A grant is opt-in and is the authority over its own fields, so it may neither
-   * disable a method nor claim every field of the receiving permission.
-   */
-  readGrant(actions: unknown, permissionPath: string): GrantDefs {
-    const registeredActions = definitions.readActions(actions, permissionPath);
-
-    for (const [method, definition] of Object.entries(registeredActions)) {
-      if (definition.enabled !== true) {
-        throw errors.create('INVALID_DEFINITION', `${permissionPath}.${method}: a grant does not allow enabled: false`);
+      if (!isRecord(entry) || typeof entry.enabled !== 'boolean') {
+        throw errors.create('INVALID_DEFINITION', `Action ${method} must declare a boolean enabled flag`);
       }
 
-      if (definition.properties === constants.ALL_FIELDS) {
-        throw errors.create('INVALID_DEFINITION', `${permissionPath}.${method}: a grant requires an explicit properties list`);
-      }
+      actions[method] = Object.freeze({ enabled: entry.enabled, properties: readProperties(entry.properties, method) });
     }
 
-    return registeredActions as GrantDefs;
+    return Object.freeze(actions) as ActionDefs;
+  },
+
+  readGrant(literal: unknown): GrantDefs {
+    const source = readLiteral(literal);
+    const grants: Record<string, GrantDef> = {};
+
+    for (const method of methodsOf(source)) {
+      const entry = source[method];
+
+      if (!isRecord(entry) || entry.enabled !== true) {
+        throw errors.create('INVALID_DEFINITION', `Grant ${method} must be enabled: a grant is opt-in`);
+      }
+
+      const properties = readProperties(entry.properties, method);
+
+      if (properties === constants.ALL_FIELDS) {
+        throw errors.create('INVALID_DEFINITION', `Grant ${method} must list its properties explicitly`);
+      }
+
+      grants[method] = Object.freeze({ enabled: true, properties });
+    }
+
+    return Object.freeze(grants) as GrantDefs;
+  },
+
+  readPropertyPaths(paths: unknown, label: string): readonly string[] {
+    if (!Array.isArray(paths)) {
+      throw errors.create('INVALID_DEFINITION', `${label} must be an array of property paths`);
+    }
+
+    const checked = paths.map(function checkEach(path: unknown): string {
+      return checkPropertyPath(path, label);
+    });
+
+    if (new Set(checked).size !== checked.length) {
+      throw errors.create('INVALID_DEFINITION', `${label}: duplicate property path`);
+    }
+
+    return Object.freeze(checked);
   },
 };
 
-function requireObject(value: unknown, message: string): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw errors.create('INVALID_DEFINITION', message);
-
-  return value as Record<string, unknown>;
-}
-
-function readActionDefinition(definition: unknown, permissionPath: string): ActionDef {
-  const action = requireObject(definition, `${permissionPath}: must be an object`);
-
-  if (typeof action.enabled !== 'boolean') {
-    throw errors.create('INVALID_DEFINITION', `${permissionPath}: enabled must be a boolean`);
-  }
-
-  if (action.properties === constants.ALL_FIELDS) {
-    return Object.freeze({ enabled: action.enabled, properties: constants.ALL_FIELDS });
-  }
-
-  return Object.freeze({ enabled: action.enabled, properties: readDeclaredProperties(action.properties, permissionPath) });
-}
-
-function readDeclaredProperties(value: unknown, permissionPath: string): readonly string[] {
-  if (!Array.isArray(value)) {
-    throw errors.create('INVALID_DEFINITION', `${permissionPath}: properties must be string[] or '${constants.ALL_FIELDS}'`);
-  }
-
-  for (const property of value) {
-    if (typeof property !== 'string' || property.length === 0) {
-      throw errors.create('INVALID_DEFINITION', `${permissionPath}: properties must be string[] or '${constants.ALL_FIELDS}'`);
-    }
-  }
-
-  const declared = value as readonly string[];
-
-  if (declared.includes(constants.ALL_FIELDS)) {
-    throw errors.create('INVALID_DEFINITION', `${permissionPath}: '${constants.ALL_FIELDS}' is only allowed as the whole properties value`);
-  }
-
-  if (new Set(declared).size !== declared.length) {
-    throw errors.create('INVALID_DEFINITION', `${permissionPath}: properties contains duplicate fields`);
-  }
-
-  for (const property of declared) properties.checkDeclaredPath(property, permissionPath);
-
-  return Object.freeze([...declared]);
-}
-
 export default definitions;
+
+function readLiteral(literal: unknown): Record<string, unknown> {
+  if (!isRecord(literal)) {
+    throw errors.create('INVALID_DEFINITION', `registerActions expects an object literal, received ${errors.describe(literal)}`);
+  }
+
+  return literal;
+}
+
+function methodsOf(source: Record<string, unknown>): Method[] {
+  const methods: Method[] = [];
+
+  for (const key of Object.keys(source)) {
+    if (!(constants.METHODS as readonly string[]).includes(key)) {
+      throw errors.create('INVALID_DEFINITION', `Unknown method: ${key}`);
+    }
+
+    methods.push(key as Method);
+  }
+
+  return methods;
+}
+
+function readProperties(value: unknown, method: string): readonly string[] | typeof constants.ALL_FIELDS {
+  if (value === constants.ALL_FIELDS) return constants.ALL_FIELDS;
+
+  return definitions.readPropertyPaths(value, `Properties of ${method}`);
+}
+
+function checkPropertyPath(path: unknown, label: string): string {
+  if (typeof path !== 'string' || path.length === 0) {
+    throw errors.create('INVALID_DEFINITION', `${label}: property paths must be non-empty strings`);
+  }
+
+  if (path === constants.ALL_FIELDS) {
+    throw errors.create('INVALID_DEFINITION', `${label}: '*' cannot appear inside a property list`);
+  }
+
+  const segments = path.split(constants.MODULE_SEPARATOR);
+
+  if (segments[0] === constants.ALL_FIELDS) {
+    throw errors.create('INVALID_DEFINITION', `${label}: a property path cannot start with a wildcard (${path})`);
+  }
+
+  for (const segment of segments) {
+    if (segment.length === 0) throw errors.create('INVALID_DEFINITION', `${label}: empty segment in property path ${path}`);
+    if (segment.includes('[') || segment.includes(']')) throw errors.create('INVALID_DEFINITION', `${label}: indexes are not allowed in property path ${path}`);
+  }
+
+  return path;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

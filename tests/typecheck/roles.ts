@@ -1,16 +1,25 @@
-import pkit from 'endpoint-permissions-kit';
+import Pkit from 'endpoint-permissions-kit';
 import type { Context, Data, PermissionId, Role } from 'endpoint-permissions-kit/types';
+
+type AppRole = 'admin' | 'staff' | 'public';
+
+const pkit = new Pkit({ roles: ['admin', 'staff', 'public'] });
 
 void verifyRoleContracts();
 
 async function verifyRoleContracts(): Promise<void> {
-  const declaredRole: Role = 'staff';
+  const declaredRole: Role<AppRole> = 'staff';
   // @ts-expect-error
-  const misspelledRole: Role = 'staf';
-  const reportsId: PermissionId = 'staff::inventory.reports::all';
+  const misspelledRole: Role<AppRole> = 'staf';
+  const reportsId: PermissionId<AppRole> = 'staff::inventory.reports::all';
   // @ts-expect-error
-  const foreignId: PermissionId = 'nobody::inventory.reports::all';
+  const foreignId: PermissionId<AppRole> = 'nobody::inventory.reports::all';
   void [declaredRole, misspelledRole, reportsId, foreignId];
+
+  const general = new Pkit();
+  general.module('inventory').name('all').role('general');
+  // @ts-expect-error
+  general.module('inventory').name('all').role('staff');
 
   const items = pkit.module('inventory').module('items').name('all');
   items.role('admin').registerActions({ find: { properties: '*', enabled: true } });
@@ -48,6 +57,8 @@ async function verifyRoleContracts(): Promise<void> {
   void pkit.validate({ action: 'inventory.items', method: 'find', permissions: [] });
   // @ts-expect-error
   void pkit.validate({ ...identity, action: undefined, method: 'find' });
+  // @ts-expect-error
+  void pkit.validate({ ...identity, role: 'nobody', method: 'find' });
 
   const validation = await pkit.validate({ ...identity, method: 'update', data: { id: 1 } });
   const id: unknown = validation.result?.data.id;
@@ -60,6 +71,9 @@ async function verifyRoleContracts(): Promise<void> {
   pkit.context.set('cropper', 'yes');
   // @ts-expect-error
   pkit.context.set('sorter', true);
+  pkit.context.set('roles', ['admin', 'public']);
+  // @ts-expect-error
+  pkit.context.set('roles', ['x']);
   const cropper: boolean = pkit.context.get('cropper');
   void cropper;
 

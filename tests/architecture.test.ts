@@ -5,7 +5,9 @@ import ts from 'typescript';
 
 const TEST_RUNNER_CALLEES = new Set(['describe', 'test', 'it', 'beforeEach', 'afterEach', 'beforeAll', 'afterAll']);
 
-const SINGLE_EXPORT_EXCEPTIONS = new Set(['src/index.ts', 'src/types.ts', 'src/cli/child.ts']);
+const SINGLE_EXPORT_EXCEPTIONS = new Set(['src/index.ts', 'src/types.ts']);
+
+const CLASS_EXPORT_FILES = new Set(['src/pkit.ts', 'src/module-builder.ts', 'src/name-builder.ts', 'src/role-builder.ts', 'src/grant-builder.ts']);
 
 describe('architecture', () => {
   describe('module exports', () => {
@@ -24,6 +26,12 @@ describe('architecture', () => {
         for (const statement of source.statements) {
           if (ts.isExportAssignment(statement)) {
             defaultExports += 1;
+            continue;
+          }
+
+          if (ts.isClassDeclaration(statement)) {
+            if (!CLASS_EXPORT_FILES.has(filename)) violations.push(`${filename}: class outside CLASS_EXPORT_FILES`);
+            if (hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) defaultExports += 1;
             continue;
           }
 
@@ -64,6 +72,10 @@ describe('architecture', () => {
     });
   });
 });
+
+function hasModifier(statement: ts.ClassDeclaration, kind: ts.SyntaxKind): boolean {
+  return (ts.getModifiers(statement) ?? []).some(function (modifier) { return modifier.kind === kind; });
+}
 
 function calleeRootName(callee: ts.Expression): string | null {
   if (ts.isIdentifier(callee)) return callee.text;
