@@ -1,5 +1,5 @@
 import type { Registry } from './registry';
-import type { ContextKey, ContextValues, NamedPermissionCatalog, PkitOptions, UserAssignments, UserPermissionMap, ValidateInput, ValidateResult } from './types';
+import type { ContextKey, ContextValues, NamedPermissionCatalog, PkitOptions, RolePermissionTree, UserAssignments, UserPermissionMap, ValidateInput, ValidateResult } from './types';
 import ModuleBuilder from './module-builder';
 import errors from './errors';
 import permissions from './permissions';
@@ -15,6 +15,7 @@ interface PkitContext<R extends string> {
 interface PkitPermissions<R extends string> {
   readonly named: NamedPermissionCatalog<R>;
   forUser(assignments: UserAssignments<R>): UserPermissionMap<R>;
+  forRole(role: R): RolePermissionTree<R>;
 }
 
 export default class Pkit<R extends string = 'general'> {
@@ -34,6 +35,7 @@ export default class Pkit<R extends string = 'general'> {
     this.permissions = Object.freeze(Object.defineProperties({}, {
       named: { get: namedView.bind(this.#registry), enumerable: true },
       forUser: { value: forUserView.bind(this.#registry), enumerable: true },
+      forRole: { value: forRoleView.bind(this.#registry), enumerable: true },
     })) as PkitPermissions<R>;
 
     this.module = this.module.bind(this);
@@ -79,4 +81,8 @@ function namedView(this: Registry): NamedPermissionCatalog {
 
 function forUserView(this: Registry, assignments: UserAssignments): UserPermissionMap {
   return permissions.forUser(snapshot.of(this), assignments);
+}
+
+function forRoleView(this: Registry, role: unknown): RolePermissionTree {
+  return permissions.forRole(snapshot.of(this), role);
 }

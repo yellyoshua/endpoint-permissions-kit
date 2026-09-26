@@ -1,10 +1,15 @@
 import type { Snapshot } from './registry';
 import type { Identity, ResolvedName } from './resolve';
-import type { MethodAccessMap, NamedPermissionCatalog, UserAssignments, UserPermissionMap } from './types';
+import type { MethodAccessMap, NamedPermissionCatalog, PermissionId, RolePermissionAction, RolePermissionModule, RolePermissionTree, UserAssignments, UserPermissionMap } from './types';
 import constants from './constants';
 import errors from './errors';
 import identifiers from './identifiers';
 import resolve from './resolve';
+
+interface ModuleDraft {
+  readonly actions: RolePermissionAction[];
+  readonly modules: Map<string, ModuleDraft>;
+}
 
 const permissions = {
   named(snapshot: Snapshot): NamedPermissionCatalog {
@@ -25,6 +30,24 @@ const permissions = {
     }
 
     return Object.freeze(access) as UserPermissionMap;
+  },
+
+  forRole(snapshot: Snapshot, role: unknown): RolePermissionTree {
+    resolve.checkIdentity(snapshot, role, []);
+
+    const root: ModuleDraft = { actions: [], modules: new Map() };
+
+    for (const permissionId of Object.keys(permissions.named(snapshot))) {
+      const reference = identifiers.parse(permissionId);
+
+      if (reference === null || reference.role !== role) continue;
+
+      const action: RolePermissionAction = { name: reference.name, identifier: reference.name, resourceName: reference.id as PermissionId };
+
+      moduleDraft(root, reference.module).actions.push(Object.freeze(action));
+    }
+
+    return Object.freeze({ modules: moduleNodes(root.modules) });
   },
 };
 
@@ -52,4 +75,29 @@ function methodAccess(resolved: ResolvedName, role: string, identity: Identity):
   for (const method of constants.METHODS) map[method] = enabled.has(method);
 
   return Object.freeze(map) as MethodAccessMap;
+}
+
+function moduleDraft(root: ModuleDraft, modulePath: string): ModuleDraft {
+  let draft = root;
+
+  for (const segment of modulePath.split(constants.MODULE_SEPARATOR)) {
+    const child = draft.modules.get(segment) ?? { actions: [], modules: new Map<string, ModuleDraft>() };
+
+    draft.modules.set(segment, child);
+    draft = child;
+  }
+
+  return draft;
+}
+
+function moduleNodes(drafts: ReadonlyMap<string, ModuleDraft>): readonly RolePermissionModule[] {
+  const nodes: RolePermissionModule[] = [];
+
+  for (const [segment, draft] of drafts) {
+    const node = { name: segment, identifier: segment, actions: Object.freeze(draft.actions) };
+
+    nodes.push(Object.freeze(draft.modules.size === 0 ? node : { ...node, modules: moduleNodes(draft.modules) }));
+  }
+
+  return Object.freeze(nodes);
 }

@@ -95,3 +95,20 @@ export type NamedPermissionCatalog<R extends string = string> = Readonly<Record<
 export type MethodAccessMap = Readonly<Record<Method, boolean>>;
 
 export type UserPermissionMap<R extends string = string> = Readonly<Record<PermissionId<R>, MethodAccessMap>>;
+
+export interface RolePermissionAction<R extends string = string> {
+  readonly name: string;
+  readonly identifier: string;
+  readonly resourceName: PermissionId<R>;
+}
+
+export interface RolePermissionModule<R extends string = string> {
+  readonly name: string;
+  readonly identifier: string;
+  readonly actions: readonly RolePermissionAction<R>[];
+  readonly modules?: readonly RolePermissionModule<R>[];
+}
+
+export interface RolePermissionTree<R extends string = string> {
+  readonly modules: readonly RolePermissionModule<R>[];
+}

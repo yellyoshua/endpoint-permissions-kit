@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `pkit.permissions.forRole(role)`: the permissions registered for one role as a frozen module tree `{ modules }`. Each module node has `name`, `identifier`, `actions` and, when it has children, `modules`; each action has `name`, `identifier` and `resourceName`, the full `[role]::[module]::[name]` identifier. It lists what can be assigned, not effective access, and leaves grants out. Throws `INVALID_INPUT` for a non-string role, `UNKNOWN_ROLE` for an undeclared one and the lazy cross-check `INVALID_DEFINITION` like the other views. New types `RolePermissionTree`, `RolePermissionModule` and `RolePermissionAction`.
+
 ## [0.3.0] - 2026-09-16
 
 ### Removed

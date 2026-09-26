@@ -106,3 +106,44 @@ if (result) {
   console.log(result.data);
 }
 ```
+
+## Listing the permissions of a role
+
+`pkit.permissions.forRole(role)` lists every permission registered for a role as a module tree, for example to build an admin screen that assigns permissions. It is the catalog of what can be assigned, not what a user can do: use `pkit.permissions.forUser()` or `validate()` for effective access.
+
+`roles-screen.js`:
+
+```js
+import { pkit } from './permissions.js';
+
+const { modules } = pkit.permissions.forRole('staff');
+```
+
+With the registrations above, `modules` is:
+
+```js
+[
+  {
+    name: 'marketing',
+    identifier: 'marketing',
+    actions: [],
+    modules: [
+      {
+        name: 'portals',
+        identifier: 'portals',
+        actions: [
+          { name: 'all', identifier: 'all', resourceName: 'staff::marketing.portals::all' },
+          { name: 'update-only', identifier: 'update-only', resourceName: 'staff::marketing.portals::update-only' },
+        ],
+      },
+      {
+        name: 'dashboard',
+        identifier: 'dashboard',
+        actions: [
+          { name: 'all', identifier: 'all', resourceName: 'staff::marketing.dashboard::all' },
+        ],
+      },
+    ],
+  },
+]
+```

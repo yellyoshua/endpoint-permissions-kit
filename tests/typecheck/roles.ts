@@ -87,6 +87,14 @@ async function verifyRoleContracts(): Promise<void> {
   void catalog['staff::inventory.items::all']?.find?.enabled;
   // @ts-expect-error
   void catalog['nobody::inventory.items::all'];
+
+  const tree = pkit.permissions.forRole('staff');
+  const resourceName: PermissionId<AppRole> | undefined = tree.modules[0]?.actions[0]?.resourceName;
+  void resourceName;
+  // @ts-expect-error
+  pkit.permissions.forRole('nobody');
+  // @ts-expect-error
+  tree.modules[0]?.actions.push({ name: 'all', identifier: 'all', resourceName: 'staff::inventory.items::all' });
 }
 
 function inspectHookArguments(data: Data, context: Context, permissions: readonly string[]): void {

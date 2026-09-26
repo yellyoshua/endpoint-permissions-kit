@@ -14,7 +14,7 @@ Framework-agnostic endpoint authorization for TypeScript and JavaScript: an expl
 - Hooks at module, name and role scope, awaited together with `Promise.allSettled`.
 - `validate()` never throws: it always returns `{ result, errors }`.
 - The keys of `data` are checked against the permission: denied by default, or cropped with `context.set('cropper', true)`.
-- Read-only permission views (`permissions.named`, `permissions.forUser`) for admin screens.
+- Read-only permission views (`permissions.named`, `permissions.forUser`, `permissions.forRole`) for admin screens.
 - Roles typed from the constructor: `new Pkit({ roles: ['admin', 'staff'] })` infers `Pkit<'admin' | 'staff'>`, so unknown roles fail to compile with no code generation.
 - No global state: your application creates the instance, exports it and imports it wherever it registers permissions or validates requests.
 - ESM, CommonJS and `.d.ts` output; runs on Node 20 or newer and on Bun.
@@ -133,7 +133,7 @@ type AppPermissionId = PermissionId<AppRole>;
 | `src/resolve.ts` | Identity checks and access resolution, shared by `validate` and `permissions.forUser` |
 | `src/properties.ts` | Walks `data`, checks each path against the permission and denies the disallowed ones, or crops them when `cropper` is on |
 | `src/validate.ts` | Runs request validation and hooks; sole owner of the `{ result, errors }` format |
-| `src/permissions.ts` | `permissions.named` and `permissions.forUser` over a snapshot |
+| `src/permissions.ts` | `permissions.named`, `permissions.forUser` and `permissions.forRole` over a snapshot |
 | `scripts/build.ts` | Cleans `dist`, bundles ESM and CJS with Bun and emits declarations with TypeScript |
 | `tests/` | Functional tests for registry, validation, security, permissions, instance isolation, the USAGE example and architecture rules |
 | `tests/typecheck/` | Isolated TypeScript program with valid and invalid uses of the public types |
