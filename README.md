@@ -12,6 +12,7 @@ Framework-agnostic endpoint authorization for TypeScript and JavaScript: an expl
 - One method-agnostic request shape: every method sends `data` and `context`, and receives `{ data }`.
 - One-hop grants: holders of one permission receive a declared subset of actions on another.
 - Hooks at module, name and role scope, awaited together with `Promise.allSettled`.
+- Implicit assignments: `assignToAllUsers()` registers the `required` name of a module, held by every user of the roles that register actions on it, so routes such as logout need no stored row.
 - `validate()` never throws: it always returns `{ result, errors }`.
 - The keys of `data` are checked against the permission: denied by default, or cropped with `context.set('cropper', true)`.
 - Read-only permission views (`permissions.named`, `permissions.forUser`, `permissions.forRole`) for admin screens.
@@ -65,12 +66,13 @@ console.log(validation.errors);
 
 - **Role catalog.** `new Pkit({ roles: [...] })` declares every role and types the instance; `pkit.context.set('roles', [...])` replaces the catalog at runtime. Without a declaration the catalog contains only `general`. `general` is an ordinary role: it must be used explicitly with `.role('general')`, it is not added to a declared catalog, and it does not back other roles. There is no implicit role anywhere: `registerActions`, role hooks, `validate()` and `permissions.forUser()` all require an explicit role.
 - **Identifier.** A permission is `[role]::[module]::[name]`, for example `staff::marketing.portals::update-only`. The module is a dot-joined path built with chained `.module(segment)` calls, the name labels a set of actions on that module, and the role is part of the key so stored rows can be audited. A request carries `role`, `action` and `method`; the name is resolved from the assignment that starts with `role::module::`, so the same role can hold `all`, `read-only` or `only-related` on one module without the route knowing which one the caller was given.
-- **Definition vs assignment vs grant.** A definition (`.name('all').role('admin').registerActions(...)`) declares what `admin::marketing.portals::all` allows; it assigns nothing. An assignment is the identifier stored among a user's permissions by your application. A grant (`.name('all').grantTo('admin::marketing.dashboard::all').registerActions(...)`) gives holders of the dashboard permission the declared actions on portals. A role alone authorizes nothing.
+- **Definition vs assignment vs grant.** A definition (`.name('all').role('admin').registerActions(...)`) declares what `admin::marketing.portals::all` allows; it assigns nothing. An assignment is the identifier stored among a user's permissions by your application. A grant (`.name('all').grantTo('admin::marketing.dashboard::all').registerActions(...)`) gives holders of the dashboard permission the declared actions on portals. A role alone authorizes only the `required` names registered for it.
 - **One-hop grants.** Access received through a grant never counts as an assignment that activates another grant. Cycles between different names are allowed; only self-reference is rejected.
 - **Data properties.** The keys of `data` are the fields the request touches, walked structurally and compared path by path with the permission. A declared property matches the exact leaf path: `'unicorn'` allows `unicorn` only when it is an empty object or array, and `'unicorn.name'` is what allows `{ unicorn: { name: 'x' } }`. Each `*` stands for exactly one segment and never the first one, so `'unicorn.*'` allows `unicorn.name` but not `unicorn.treasures.id`, and `'*.name'` is rejected at registration. Array elements share their container's path, so `treasures[0].id` is compared as `treasures.id` and `tags: ['a', 'b']` as `tags`; an object key is always a path segment, so `{ treasures: { '0': { id: 1 } } }` is compared as `treasures.0.id`, not `treasures.id`. No key is exempt: `constructor`, `prototype` and `__proto__` are compared and filtered like any other field.
 - **Deny or crop.** With the default `cropper: false` any path outside the permission denies the request, and `fields` lists the index-free paths. With `pkit.context.set('cropper', true)` nothing is denied: the allowed part of `data` is copied out, arrays are compacted and the containers the crop emptied are pruned. Containers that arrived empty and are allowed stay. The `data` object you pass is never mutated.
 - **Reserved fields.** `pkit.context.set('reservedFields', ['id', 'meta.version'])` adds paths that every permission with a property list allows, in both modes: they are never denied and always kept by the crop. The list starts empty, replaces the previous one on each call, and is validated once with the rules of declared properties. Matching is exact, like any declared property.
 - **Direct assignment precedence.** If the user holds a name of the requested module directly, that definition decides completely, even when a grant to the same target would be wider. Only when no name of the module is assigned are the applicable grants combined, and their fields are unioned.
+- **Implicit assignment.** `module.assignToAllUsers()` returns the builder of the reserved name `required`, with the same `role`, `grantTo` and `hook` methods as `.name(...)`. Every user whose role registers actions on it holds `[role]::[module]::required` without storing it: `validate()`, `permissions.forUser()` and the `permissions` argument of hooks include it, and it can activate grants. A stored name of the same module replaces it for that user; otherwise it counts as a direct assignment and takes precedence over grants. `.name('required')` throws `INVALID_DEFINITION`, a stored `::required` row is accepted and ignored, and `permissions.forRole()` leaves these names out. It is not an implicit role: the user still needs the role.
 - **One name per module.** A user holds at most one name of a given `role::module`, and at most one name of a module is reachable by grant. Two of either is `AMBIGUOUS_PERMISSION`: the request names no name, so the library denies instead of choosing between a wider and a narrower variant.
 
 ## Error contract
@@ -85,7 +87,7 @@ console.log(validation.errors);
 | `UNKNOWN_PERMISSION` | An assigned identifier is not assignable |
 | `AMBIGUOUS_PERMISSION` | Two names of one `role::module` are assigned, or two names of one module are reachable by grant |
 | `PERMISSION_ROLE_MISMATCH` | An assigned identifier carries a role different from the authenticated one |
-| `PERMISSION_NOT_ASSIGNED` | No assignment under `role::module::` and no active grant for the module |
+| `PERMISSION_NOT_ASSIGNED` | No assignment under `role::module::`, no `required` name of the module for the role and no active grant for the module |
 | `METHOD_DISABLED` | Method absent or disabled on the assigned definition, or not granted by any applicable grant |
 | `PROPERTIES_NOT_ALLOWED` | Paths of `data` outside the allowed fields; `fields` lists them without array indexes. Never raised with `cropper` on |
 | `HOOK_ERROR` | One entry per failed hook; `cause` keeps the thrown value |
@@ -122,7 +124,7 @@ type AppPermissionId = PermissionId<AppRole>;
 | --- | --- |
 | `src/index.ts` | Exports the `Pkit` class as default and named export, `METHODS` and the published types |
 | `src/types.ts` | Public contracts, generic in the role: roles, methods, actions, grants, hooks, inputs, results, errors and views; published as `./types` |
-| `src/constants.ts` | Available methods, the `general` role, the global hook owner marker and the field wildcard |
+| `src/constants.ts` | Available methods, the `general` role, the reserved `required` name, the global hook owner marker and the field wildcard |
 | `src/errors.ts` | Creates `PkitError` exceptions with a `code` and renders untrusted values for their messages |
 | `src/pkit.ts` | `Pkit` class: per-instance registry, `context`, `module`, `validate` and `permissions` |
 | `src/module-builder.ts`, `src/name-builder.ts`, `src/role-builder.ts`, `src/grant-builder.ts` | Builder classes cached by key with bound methods; register actions, grants and hooks on the instance registry |
@@ -130,12 +132,12 @@ type AppPermissionId = PermissionId<AppRole>;
 | `src/identifiers.ts` | The `[role]::[module]::[name]` format: builds identifiers, parses them and checks each segment |
 | `src/definitions.ts` | Reads a `registerActions` or grant literal into the frozen definition the registry stores |
 | `src/snapshot.ts` | Compiles the registry into frozen views and runs the cross-checks that need every registration loaded; memoized until the next mutation |
-| `src/resolve.ts` | Identity checks and access resolution, shared by `validate` and `permissions.forUser` |
+| `src/resolve.ts` | Identity checks with the role's `required` names and access resolution, shared by `validate` and the permission views |
 | `src/properties.ts` | Walks `data`, checks each path against the permission and denies the disallowed ones, or crops them when `cropper` is on |
 | `src/validate.ts` | Runs request validation and hooks; sole owner of the `{ result, errors }` format |
 | `src/permissions.ts` | `permissions.named`, `permissions.forUser` and `permissions.forRole` over a snapshot |
 | `scripts/build.ts` | Cleans `dist`, bundles ESM and CJS with Bun and emits declarations with TypeScript |
-| `tests/` | Functional tests for registry, validation, security, permissions, instance isolation, the USAGE example and architecture rules |
+| `tests/` | Functional tests for registry, validation, security, permissions, implicit assignments, instance isolation, the USAGE example and architecture rules |
 | `tests/typecheck/` | Isolated TypeScript program with valid and invalid uses of the public types |
 
 ## Scope limits

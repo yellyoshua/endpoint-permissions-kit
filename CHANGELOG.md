@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-05
+
+### Added
+
+- `ModuleBuilder.assignToAllUsers()`: returns the `NameBuilder` of the reserved name `required`, with the same `role`, `grantTo` and `hook` methods as `.name(...)`. Every user whose role registers actions on it holds `[role]::[module]::required` without storing it. A stored name of the same module replaces it for that user; otherwise it counts as a direct assignment, takes precedence over grants and can activate grants. `permissions.forUser()` includes it and `permissions.forRole()` leaves it out.
+
+### Changed
+
+- **Breaking.** `required` is a reserved permission name: `.name('required')` throws `INVALID_DEFINITION`. Rename any existing `required` name before upgrading.
+- Hooks receive the caller's identifiers followed by the `required` identifiers injected for the request that the input did not contain. When nothing is injected they receive the input array itself, as before.
+- A stored `[role]::[module]::required` row is accepted and ignored; it never causes `AMBIGUOUS_PERMISSION`.
+
+### Migration
+
+1. Register `assignToAllUsers()` on the module next to the old name and copy the old name's hooks.
+2. Deploy: users with an old stored row keep the old name; the rest use `required`.
+3. Delete the old rows from your store.
+4. Remove the old name's registrations.
+
 ## [0.3.1] - 2026-09-26
 
 ### Added
@@ -83,6 +102,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `pkit generate` CLI with `--config`, `--out` and `--check`, generating a `RoleRegistry` augmentation for `endpoint-permissions-kit/types`.
 - ESM, CommonJS and TypeScript declaration output; `endpoint-permissions-kit/types` subpath; Node 20 or newer.
 
+[0.4.0]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.4.0
 [0.3.1]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.3.1
 [0.3.0]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.3.0
 [0.2.1]: https://github.com/yellyoshua/endpoint-permissions-kit/releases/tag/v0.2.1
