@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-05
+
+### Added
+
+- A name can be registered with only `grantTo(...)` and no `registerActions` for any role. It is reachable through its grant sources and is never assignable.
+
+### Changed
+
+- **Breaking.** `permissions.forUser()` lists only the identifiers the user has stored. Names reached through a grant and the `required` names of the role are no longer listed; `validate()` still applies them.
+- **Breaking.** `permissions.named` no longer contains `[role]::[module]::required` identifiers.
+- **Breaking.** Hooks receive the caller's `permissions` array unchanged; the `required` identifiers are no longer appended.
+- **Breaking.** A stored `[role]::[module]::required` row, or the identifier of a name that only has grants, fails with `UNKNOWN_PERMISSION` in `validate()` and `permissions.forUser()`. Before, a stored `required` row was accepted and ignored.
+- The `INVALID_DEFINITION` message for a module with hooks and no name now reads `has hooks but no registered name`.
+
+### Migration
+
+1. Delete the stored `::required` rows from your store.
+2. Read inherited or `required` access with `validate()`, not with `permissions.forUser()`.
+3. Remove hook logic that looks for `::required` identifiers in `permissions`.
+
 ## [0.4.0] - 2026-10-05
 
 ### Added

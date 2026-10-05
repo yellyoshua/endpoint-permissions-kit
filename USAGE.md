@@ -157,9 +157,33 @@ const { result } = await pkit.validate({
 
 A stored name of the same module, such as `staff::account.sessions::all`, replaces `required` for that user. To stop storing existing rows: register `assignToAllUsers()` next to the old name and copy its hooks, deploy, delete the stored rows, then remove the old name.
 
+`required` names are never stored: a stored `staff::account.sessions::required` row fails with `UNKNOWN_PERMISSION`, and the `permissions` argument of hooks holds only the stored identifiers.
+
+## Permissions reached only through a grant
+
+A name can have grants and no `registerActions` for any role. Holders of the source permission reach it; nobody can be assigned it, so `staff::marketing.reports::all` below is `UNKNOWN_PERMISSION` when stored and is absent from every view.
+
+```js
+const reports = pkit.module('marketing').module('reports').name('all');
+
+reports.grantTo('staff::marketing.dashboard::all').registerActions({
+  find: { enabled: true, properties: ['id', 'title', 'ownerId'] },
+});
+
+function checkReportOwner(data, context) {
+  if (data.ownerId !== context.user.id) {
+    throw new Error('Only your own reports can be read');
+  }
+}
+
+reports.hook('find', checkReportOwner);
+```
+
+A staff user who stores `staff::marketing.dashboard::all` passes `validate()` on `marketing.reports` `find` with the fields of the grant, and its hooks run with the stored identifiers.
+
 ## Listing the permissions of a role
 
-`pkit.permissions.forRole(role)` lists every permission registered for a role as a module tree, for example to build an admin screen that assigns permissions. It is the catalog of what can be assigned, not what a user can do: use `pkit.permissions.forUser()` or `validate()` for effective access. Names registered with `assignToAllUsers()` are left out: nobody assigns them.
+`pkit.permissions.forRole(role)` lists every permission registered for a role as a module tree, for example to build an admin screen that assigns permissions. It is the catalog of what can be assigned, not what a user can do: use `validate()` for effective access. `pkit.permissions.forUser()` lists only the identifiers the user has stored, with the methods each one enables; access received through `required` or a grant appears only in `validate()`. Names registered with `assignToAllUsers()` and names that only have grants are left out: nobody assigns them.
 
 `roles-screen.js`:
 
