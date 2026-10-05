@@ -69,7 +69,6 @@ function prepareRequest(target: Registry, compiled: Snapshot, input: unknown): P
 
   const identity = resolve.checkIdentity(compiled, role, permissions);
   const access = resolve.resolveAccess(compiled, role, action, method as Method, identity);
-  const heldPermissions = effectivePermissions(permissions, identity.injected);
 
   const hooks: HookFn[] = [];
   const groups = [
@@ -82,7 +81,7 @@ function prepareRequest(target: Registry, compiled: Snapshot, input: unknown): P
     if (group !== undefined) hooks.push(...group);
   }
 
-  if (target.cropper) return { hooks, context, permissions: heldPermissions, data: properties.crop(data, access.properties, target.reservedFields) };
+  if (target.cropper) return { hooks, context, permissions, data: properties.crop(data, access.properties, target.reservedFields) };
 
   const denied = properties.deny(data, access.properties, target.reservedFields);
 
@@ -90,7 +89,7 @@ function prepareRequest(target: Registry, compiled: Snapshot, input: unknown): P
     throw Object.assign(errors.create('PROPERTIES_NOT_ALLOWED', `fields not allowed: ${denied.join(', ')}`), { fields: denied });
   }
 
-  return { hooks, context, permissions: heldPermissions, data };
+  return { hooks, context, permissions, data };
 }
 
 function readOptionalObject(value: unknown, label: string): Data {
@@ -99,18 +98,6 @@ function readOptionalObject(value: unknown, label: string): Data {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw errors.create('INVALID_INPUT', `${label} must be an object`);
 
   return value as Data;
-}
-
-function effectivePermissions(permissions: readonly string[], injected: readonly string[]): readonly string[] {
-  if (injected.length === 0) return permissions;
-
-  const effective = [...permissions];
-
-  for (const permissionId of injected) {
-    if (!permissions.includes(permissionId)) effective.push(permissionId);
-  }
-
-  return effective;
 }
 
 async function invokeHook(hook: HookFn, request: PreparedRequest): Promise<unknown> {

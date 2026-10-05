@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { PermissionId, RolePermissionAction, RolePermissionModule } from '../src/types';
+import type { Context, Data, PermissionId, RolePermissionAction, RolePermissionModule } from '../src/types';
 import Pkit from '../src/index';
 import { ADMIN_REPORTS, ADMIN_ITEMS_ALL, STAFF_REPORTS, STAFF_ITEMS_ALL, STAFF_ITEMS_UPDATE_ONLY, setupInventory } from './helpers';
 
@@ -8,6 +8,24 @@ const noAccess = { find: false, update: false, create: false, remove: false };
 const CRUD_NAMES = ['all', 'find', 'create', 'update', 'remove', 'update-self'];
 
 const findId = { find: { enabled: true, properties: ['id'] } } as const;
+
+const STAFF_ONLY_REPORTS = 'staff::reports::all';
+const STAFF_GRANT_ONLY_ITEMS = 'staff::items::all';
+
+function setupGrantOnly(captured: (readonly string[])[]) {
+  const pkit = new Pkit({ roles: ['staff'] });
+  const items = pkit.module('items').name('all');
+
+  pkit.module('reports').name('all').role('staff').registerActions(findId);
+  items.grantTo(STAFF_ONLY_REPORTS).registerActions({ find: { enabled: true, properties: ['id'] }, update: { enabled: true, properties: ['id', 'name'] } });
+  items.hook('find', capturePermissions.bind(null, captured));
+
+  return { pkit };
+}
+
+function capturePermissions(captured: (readonly string[])[], _data: Data, _context: Context, permissions: readonly string[]): void {
+  captured.push(permissions);
+}
 
 function setupStaffCatalog() {
   const pkit = new Pkit({ roles: ['admin', 'staff', 'public'] });
@@ -68,15 +86,14 @@ describe('permissions', () => {
     });
   });
 
-  describe('forUser resolution', () => {
-    test('resolves direct assignments and one-hop grants', () => {
+  describe('forUser listing', () => {
+    test('lists only stored permissions', () => {
       const { pkit } = setupInventory();
 
       expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_REPORTS] })).toEqual({
-        [STAFF_ITEMS_ALL]: { ...noAccess, find: true },
         [STAFF_REPORTS]: { ...noAccess, find: true },
       });
-      expect(pkit.permissions.forUser({ role: 'admin', permissions: [ADMIN_REPORTS] })[ADMIN_ITEMS_ALL]).toEqual({ ...noAccess, find: true });
+      expect(pkit.permissions.forUser({ role: 'admin', permissions: [ADMIN_REPORTS] })[ADMIN_ITEMS_ALL]).toBeUndefined();
       expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_ITEMS_UPDATE_ONLY] })).toEqual({
         [STAFF_ITEMS_UPDATE_ONLY]: { ...noAccess, find: true, update: true },
       });
@@ -90,16 +107,48 @@ describe('permissions', () => {
         'public::inventory.items::all': noAccess,
       });
     });
+  });
 
-    test('prefers the direct assignment over grants', () => {
-      const { pkit } = setupInventory();
+  describe('grant-only names', () => {
+    test('authorize through the source permission and stay out of every view', async () => {
+      const { pkit } = setupGrantOnly([]);
 
-      const access = pkit.permissions.forUser({ role: 'admin', permissions: [ADMIN_REPORTS, ADMIN_ITEMS_ALL] });
+      const validation = await pkit.validate({ action: 'items', method: 'update', role: 'staff', permissions: [STAFF_ONLY_REPORTS], data: { id: 1, name: 'x' } });
 
-      expect(access[ADMIN_ITEMS_ALL]).toEqual({ find: true, update: true, create: true, remove: true });
-      expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_REPORTS, STAFF_ITEMS_ALL] })[STAFF_ITEMS_ALL]).toEqual({
-        ...noAccess, find: true, update: true,
+      expect(validation.errors).toEqual([]);
+      expect(validation.result?.data).toEqual({ id: 1, name: 'x' });
+      expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_ONLY_REPORTS] })).toEqual({ [STAFF_ONLY_REPORTS]: { ...noAccess, find: true } });
+      expect(Object.keys(pkit.permissions.named)).toEqual([STAFF_ONLY_REPORTS]);
+      expect(pkit.permissions.forRole('staff')).toEqual({
+        modules: [{ name: 'reports', identifier: 'reports', actions: [{ name: 'all', identifier: 'all', resourceName: STAFF_ONLY_REPORTS }] }],
       });
+    });
+
+    test('reject the grant-only identifier when stored', async () => {
+      const { pkit } = setupGrantOnly([]);
+
+      const validation = await pkit.validate({ action: 'items', method: 'find', role: 'staff', permissions: [STAFF_GRANT_ONLY_ITEMS] });
+
+      expect(validation.errors[0]?.code).toBe('UNKNOWN_PERMISSION');
+      expect(pkit.permissions.forUser.bind(null, { role: 'staff', permissions: [STAFF_GRANT_ONLY_ITEMS] })).toThrow(expect.objectContaining({ code: 'UNKNOWN_PERMISSION' }));
+    });
+
+    test('deny without the source permission', async () => {
+      const { pkit } = setupGrantOnly([]);
+
+      const validation = await pkit.validate({ action: 'items', method: 'find', role: 'staff', permissions: [] });
+
+      expect(validation.errors[0]?.code).toBe('PERMISSION_NOT_ASSIGNED');
+    });
+
+    test('run their hooks with the stored permissions', async () => {
+      const captured: (readonly string[])[] = [];
+      const { pkit } = setupGrantOnly(captured);
+      const input = [STAFF_ONLY_REPORTS];
+
+      await pkit.validate({ action: 'items', method: 'find', role: 'staff', permissions: input, data: { id: 1 } });
+
+      expect(captured).toEqual([input]);
     });
   });
 
@@ -252,7 +301,7 @@ describe('permissions', () => {
       expect(Object.isFrozen(pkit.permissions.named)).toBe(true);
       expect(Object.getPrototypeOf(pkit.permissions.named)).toBeNull();
       expect(Object.isFrozen(access)).toBe(true);
-      expect(Object.isFrozen(access[STAFF_ITEMS_ALL])).toBe(true);
+      expect(Object.isFrozen(access[STAFF_REPORTS])).toBe(true);
       expect(Object.getPrototypeOf(access)).toBeNull();
     });
 

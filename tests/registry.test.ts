@@ -129,19 +129,29 @@ describe('registry', () => {
   });
 
   describe('cross checks when the views are built', () => {
-    test('rejects names without actions even when they have hooks or grants', () => {
+    test('rejects names without actions or grants even when they have hooks', () => {
       const withHook = new Pkit({ roles: ['staff'] });
 
       withHook.module('items').name('all').hook('find', allowHook);
 
       expect(function () { return withHook.permissions.named; }).toThrow(invalidDefinition());
+    });
 
+    test('accepts a grant-only name and keeps it out of the assignable catalog', () => {
       const withGrant = new Pkit({ roles: ['staff'] });
 
       withGrant.module('reports').name('all').role('staff').registerActions(findId);
       withGrant.module('items').name('all').grantTo('staff::reports::all').registerActions(findId);
 
-      expect(function () { return withGrant.permissions.named; }).toThrow(invalidDefinition());
+      expect(Object.keys(withGrant.permissions.named)).toEqual(['staff::reports::all']);
+    });
+
+    test('rejects a grant-only name whose source does not exist', () => {
+      const pkit = new Pkit({ roles: ['staff'] });
+
+      pkit.module('items').name('all').grantTo('staff::reports::all').registerActions(findId);
+
+      expect(function () { return pkit.permissions.named; }).toThrow(invalidDefinition());
     });
 
     test('rejects grants whose source or method does not exist', () => {

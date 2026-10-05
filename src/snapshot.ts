@@ -19,14 +19,17 @@ const snapshot = {
   build(target: Registry): Snapshot {
     const named: Record<string, ActionDefs> = Object.create(null);
     const requiredByRole = new Map<string, PermissionReference[]>();
+    const declared = new Set<string>();
 
     for (const [modulePath, moduleEntry] of target.modules) {
       for (const [name, nameEntry] of moduleEntry.names) {
         for (const [role, actions] of nameEntry.actions) {
           const permissionId = identifiers.build(role, modulePath, name);
 
-          named[permissionId] = actions;
+          declared.add(permissionId);
           addRequired(requiredByRole, { id: permissionId, role, module: modulePath, name });
+
+          if (name !== constants.NAME_FOR_ALL_USERS_PERMISSIONS) named[permissionId] = actions;
         }
       }
     }
@@ -34,7 +37,7 @@ const snapshot = {
     const assignable = new Set(Object.keys(named));
     const grantsBySource = new Map<string, Map<string, string[]>>();
 
-    for (const [modulePath, moduleEntry] of target.modules) checkModule(modulePath, moduleEntry, assignable, grantsBySource);
+    for (const [modulePath, moduleEntry] of target.modules) checkModule(modulePath, moduleEntry, declared, grantsBySource);
 
     return Object.freeze({
       named: Object.freeze(named) as NamedPermissionCatalog,
@@ -58,19 +61,19 @@ function addRequired(requiredByRole: Map<string, PermissionReference[]>, referen
   references.push(Object.freeze(reference));
 }
 
-function checkModule(modulePath: string, moduleEntry: ModuleEntry, assignable: ReadonlySet<string>, grantsBySource: Map<string, Map<string, string[]>>): void {
+function checkModule(modulePath: string, moduleEntry: ModuleEntry, declared: ReadonlySet<string>, grantsBySource: Map<string, Map<string, string[]>>): void {
   if (moduleEntry.names.size === 0) {
-    throw errors.create('INVALID_DEFINITION', `"${modulePath}" has hooks but no name with registered actions`);
+    throw errors.create('INVALID_DEFINITION', `"${modulePath}" has hooks but no registered name`);
   }
 
   for (const [name, nameEntry] of moduleEntry.names) {
     const permissionPath = `${modulePath}::${name}`;
 
-    if (nameEntry.actions.size === 0) {
-      throw errors.create('INVALID_DEFINITION', `"${permissionPath}" has no registered actions for any role`);
+    if (nameEntry.actions.size === 0 && nameEntry.grants.size === 0) {
+      throw errors.create('INVALID_DEFINITION', `"${permissionPath}" has no registered actions or grants`);
     }
 
-    checkGrants(permissionPath, nameEntry, assignable);
+    checkGrants(permissionPath, nameEntry, declared);
     checkRoleHooks(permissionPath, nameEntry);
 
     for (const sourceId of nameEntry.grants.keys()) {
@@ -84,11 +87,13 @@ function checkModule(modulePath: string, moduleEntry: ModuleEntry, assignable: R
   }
 }
 
-function checkGrants(permissionPath: string, nameEntry: NameEntry, assignable: ReadonlySet<string>): void {
+function checkGrants(permissionPath: string, nameEntry: NameEntry, declared: ReadonlySet<string>): void {
   for (const [sourceId, grant] of nameEntry.grants) {
-    if (!assignable.has(sourceId)) {
+    if (!declared.has(sourceId)) {
       throw errors.create('INVALID_DEFINITION', `"${permissionPath}": grantTo "${sourceId}" references a permission with no registered actions`);
     }
+
+    if (nameEntry.actions.size === 0) continue;
 
     for (const method of Object.keys(grant.actions)) {
       if (declaresMethod(nameEntry, method)) continue;

@@ -76,7 +76,7 @@ describe('audit fixes', () => {
 
       pkit.module('archive').hook('remove', noop);
 
-      expect(readCatalog.bind(null, pkit)).toThrow(/has hooks but no name with registered actions/);
+      expect(readCatalog.bind(null, pkit)).toThrow(/has hooks but no registered name/);
 
       const validation = await pkit.validate({ ...staffItems, method: 'find' });
 

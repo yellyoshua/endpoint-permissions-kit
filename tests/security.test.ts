@@ -500,7 +500,7 @@ describe('security', () => {
       expect(codesOf(validation)).toEqual(['AMBIGUOUS_PERMISSION']);
     });
 
-    test('resolves forUser to the same name validate resolves', async () => {
+    test('lists in forUser the stored name validate applies', async () => {
       const pkit = setupStudents();
 
       const identity = { role: 'staff', permissions: [STUDENTS_READ_ONLY] } as const;
@@ -518,12 +518,6 @@ describe('security', () => {
 
       expect(pkit.permissions.forUser.bind(null, identity)).toThrow(expect.objectContaining({ code: 'AMBIGUOUS_PERMISSION' }));
       expect(codesOf(await pkit.validate({ ...identity, action: STUDENTS, method: 'find' }))).toEqual(['AMBIGUOUS_PERMISSION']);
-    });
-
-    test('throws the grant ambiguity from forUser as well', () => {
-      const pkit = setupAmbiguousGrant();
-
-      expect(pkit.permissions.forUser.bind(null, { role: 'staff', permissions: [STAFF_AUDIT] })).toThrow(expect.objectContaining({ code: 'AMBIGUOUS_PERMISSION' }));
     });
   });
 

@@ -2,16 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import type { Context, Data, ValidationError } from '../src/types';
 import Pkit from '../src/index';
 
-const STAFF_LOGOUT = 'staff::account.logout::required';
 const ADMIN_LOGOUT = 'admin::account.logout::required';
 const STAFF_SESSIONS_REQUIRED = 'staff::account.sessions::required';
 const STAFF_SESSIONS_ALL = 'staff::account.sessions::all';
-const STAFF_PROFILE = 'staff::account.profile::all';
 const STAFF_SUPPORT = 'staff::support::all';
 const PUBLIC_CATALOG = 'public::catalog::all';
 
-const FIND_ONLY = { find: true, update: false, create: false, remove: false };
-const CREATE_ONLY = { find: false, update: false, create: true, remove: false };
 const FIND_AND_REMOVE = { find: true, update: false, create: false, remove: true };
 
 describe('assignToAllUsers', () => {
@@ -105,14 +101,14 @@ describe('assignToAllUsers', () => {
       expect(validation.errors[0]).toMatchObject({ code: 'PROPERTIES_NOT_ALLOWED', fields: ['userId'] });
     });
 
-    test('a stored required row is accepted and ignored', async () => {
+    test('a stored required row is rejected', async () => {
       const { pkit } = setupAccount([]);
-      const base = { action: 'account.sessions', method: 'find', role: 'staff', data: { userId: 2 } } as const;
+      const base = { action: 'account.sessions', method: 'find', role: 'staff', data: { id: 1 } } as const;
       const withAll = await pkit.validate({ ...base, permissions: [STAFF_SESSIONS_REQUIRED, STAFF_SESSIONS_ALL] });
       const alone = await pkit.validate({ ...base, permissions: [STAFF_SESSIONS_REQUIRED] });
 
-      expect(withAll.errors).toEqual([]);
-      expect(alone.errors[0]).toMatchObject({ code: 'PROPERTIES_NOT_ALLOWED', fields: ['userId'] });
+      expect(codesOf(withAll)).toEqual(['UNKNOWN_PERMISSION']);
+      expect(codesOf(alone)).toEqual(['UNKNOWN_PERMISSION']);
     });
 
     test('invalid required rows still fail closed', async () => {
@@ -148,34 +144,27 @@ describe('assignToAllUsers', () => {
   });
 
   describe('hook permissions', () => {
-    test('hooks receive the injected identifiers when the input is empty', async () => {
+    test('hooks receive an empty input as is, without required identifiers', async () => {
       const captured: (readonly string[])[] = [];
       const { pkit } = setupAccount(captured);
+      const input: string[] = [];
 
-      await pkit.validate({ action: 'account.sessions', method: 'find', role: 'staff', permissions: [], data: { id: 1 } });
+      await pkit.validate({ action: 'account.sessions', method: 'find', role: 'staff', permissions: input, data: { id: 1 } });
 
-      expect(captured[0]).toEqual([STAFF_LOGOUT, STAFF_SESSIONS_REQUIRED]);
+      expect(captured[0]).toBe(input);
+      expect(captured[0]).toEqual([]);
     });
 
-    test('hooks receive no duplicates', async () => {
-      const captured: (readonly string[])[] = [];
-      const { pkit } = setupAccount(captured);
-
-      await pkit.validate({ action: 'account.sessions', method: 'find', role: 'staff', permissions: [STAFF_SESSIONS_REQUIRED], data: { id: 1 } });
-
-      expect(captured[0]).toEqual([STAFF_SESSIONS_REQUIRED, STAFF_LOGOUT]);
-    });
-
-    test('hooks receive only the applied required identifiers', async () => {
+    test('hooks receive only the stored identifiers', async () => {
       const captured: (readonly string[])[] = [];
       const { pkit } = setupAccount(captured);
 
       await pkit.validate({ action: 'account.sessions', method: 'find', role: 'staff', permissions: [STAFF_SESSIONS_ALL], data: { id: 1 } });
 
-      expect(captured[0]).toEqual([STAFF_SESSIONS_ALL, STAFF_LOGOUT]);
+      expect(captured[0]).toEqual([STAFF_SESSIONS_ALL]);
     });
 
-    test('hooks receive the input array itself when nothing is injected', async () => {
+    test('hooks receive the input array itself', async () => {
       const captured: (readonly string[])[] = [];
       const { pkit } = setupAccount(captured);
       const input = [PUBLIC_CATALOG];
@@ -187,23 +176,22 @@ describe('assignToAllUsers', () => {
   });
 
   describe('views', () => {
-    test('forUser includes the applied required names', () => {
+    test('forUser leaves required names and the grants they activate out', () => {
       const { pkit } = setupAccount([]);
 
-      expect(pkit.permissions.forUser({ role: 'staff', permissions: [] })).toEqual({
-        [STAFF_LOGOUT]: CREATE_ONLY,
-        [STAFF_SESSIONS_REQUIRED]: FIND_ONLY,
-        [STAFF_PROFILE]: FIND_ONLY,
-      });
+      expect(pkit.permissions.forUser({ role: 'staff', permissions: [] })).toEqual({});
     });
 
-    test('forUser shows the stored name instead of the replaced required', () => {
+    test('forUser lists only the stored names', () => {
       const { pkit } = setupAccount([]);
 
-      expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_SESSIONS_ALL] })).toEqual({
-        [STAFF_LOGOUT]: CREATE_ONLY,
-        [STAFF_SESSIONS_ALL]: FIND_AND_REMOVE,
-      });
+      expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_SESSIONS_ALL] })).toEqual({ [STAFF_SESSIONS_ALL]: FIND_AND_REMOVE });
+    });
+
+    test('forUser rejects a stored required row', () => {
+      const { pkit } = setupAccount([]);
+
+      expect(function () { return pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_SESSIONS_REQUIRED] }); }).toThrow(expect.objectContaining({ code: 'UNKNOWN_PERMISSION' }));
     });
 
     test('forRole leaves required names out', () => {
@@ -232,10 +220,11 @@ describe('assignToAllUsers', () => {
       });
     });
 
-    test('named keeps the required names', () => {
+    test('named leaves required names out', () => {
       const { pkit } = setupAccount([]);
 
-      expect(Object.keys(pkit.permissions.named)).toEqual(expect.arrayContaining([STAFF_LOGOUT, ADMIN_LOGOUT, STAFF_SESSIONS_REQUIRED]));
+      expect(Object.keys(pkit.permissions.named).some(isRequiredIdentifier)).toBe(false);
+      expect(Object.keys(pkit.permissions.named)).toEqual(expect.arrayContaining([STAFF_SESSIONS_ALL, STAFF_SUPPORT]));
     });
   });
 });
@@ -281,6 +270,10 @@ function capturePermissions(captured: (readonly string[])[], _data: Data, _conte
 }
 
 function noop(): void {}
+
+function isRequiredIdentifier(permissionId: string): boolean {
+  return permissionId.endsWith('::required');
+}
 
 function codesOf(validation: { errors: readonly ValidationError[] }): string[] {
   const codes: string[] = [];

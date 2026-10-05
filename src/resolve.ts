@@ -1,16 +1,14 @@
 import type { NameEntry, Snapshot } from './registry';
 import type { Method, Properties } from './types';
-import constants from './constants';
 import errors from './errors';
 import identifiers from './identifiers';
 
-export interface Identity {
+interface Identity {
   readonly assigned: ReadonlySet<string>;
   readonly names: ReadonlyMap<string, string>;
-  readonly injected: readonly string[];
 }
 
-export interface ResolvedName {
+interface ResolvedName {
   readonly name: string;
   readonly entry: NameEntry;
   readonly direct: boolean;
@@ -43,8 +41,6 @@ const resolve = {
 
       if (!snapshot.assignable.has(reference.id)) throw errors.create('UNKNOWN_PERMISSION', `"${reference.id}" is not an assignable permission`);
 
-      if (reference.name === constants.NAME_FOR_ALL_USERS_PERMISSIONS) continue;
-
       const held = names.get(reference.module);
 
       if (held !== undefined && held !== reference.name) {
@@ -55,57 +51,18 @@ const resolve = {
       names.set(reference.module, reference.name);
     }
 
-    const injected: string[] = [];
-
     for (const reference of snapshot.requiredByRole.get(role) ?? []) {
       if (names.has(reference.module)) continue;
 
       assigned.add(reference.id);
       names.set(reference.module, reference.name);
-      injected.push(reference.id);
     }
 
-    return { assigned, names, injected };
-  },
-
-  resolveName(snapshot: Snapshot, role: string, modulePath: string, identity: Identity): ResolvedName | null {
-    const moduleEntry = snapshot.modules.get(modulePath);
-
-    if (moduleEntry === undefined) throw errors.create('UNKNOWN_ACTION', `module "${modulePath}" is not registered`);
-
-    const held = identity.names.get(modulePath);
-
-    if (held !== undefined) {
-      const entry = moduleEntry.names.get(held);
-
-      if (entry === undefined) return null;
-
-      return { name: held, entry, direct: true };
-    }
-
-    let reached: ResolvedName | null = null;
-
-    for (const sourceId of identity.assigned) {
-      const names = snapshot.grantsBySource.get(sourceId)?.get(modulePath);
-
-      if (names === undefined) continue;
-
-      for (const name of names) {
-        if (reached !== null && reached.name !== name) {
-          throw errors.create('AMBIGUOUS_PERMISSION', `grants reach "${identifiers.build(role, modulePath, reached.name)}" and "${identifiers.build(role, modulePath, name)}": a request names no permission name, so module "${modulePath}" cannot be resolved`);
-        }
-
-        const entry = moduleEntry.names.get(name);
-
-        if (entry !== undefined) reached = { name, entry, direct: false };
-      }
-    }
-
-    return reached;
+    return { assigned, names };
   },
 
   resolveAccess(snapshot: Snapshot, role: string, modulePath: string, method: Method, identity: Identity): Access {
-    const resolved = resolve.resolveName(snapshot, role, modulePath, identity);
+    const resolved = resolveName(snapshot, role, modulePath, identity);
 
     if (resolved === null) {
       throw errors.create('PERMISSION_NOT_ASSIGNED', `no name of module "${modulePath}" is assigned or granted to role "${role}" by the user permissions`);
@@ -144,3 +101,39 @@ const resolve = {
 };
 
 export default resolve;
+
+function resolveName(snapshot: Snapshot, role: string, modulePath: string, identity: Identity): ResolvedName | null {
+  const moduleEntry = snapshot.modules.get(modulePath);
+
+  if (moduleEntry === undefined) throw errors.create('UNKNOWN_ACTION', `module "${modulePath}" is not registered`);
+
+  const held = identity.names.get(modulePath);
+
+  if (held !== undefined) {
+    const entry = moduleEntry.names.get(held);
+
+    if (entry === undefined) return null;
+
+    return { name: held, entry, direct: true };
+  }
+
+  let reached: ResolvedName | null = null;
+
+  for (const sourceId of identity.assigned) {
+    const names = snapshot.grantsBySource.get(sourceId)?.get(modulePath);
+
+    if (names === undefined) continue;
+
+    for (const name of names) {
+      if (reached !== null && reached.name !== name) {
+        throw errors.create('AMBIGUOUS_PERMISSION', `grants reach "${identifiers.build(role, modulePath, reached.name)}" and "${identifiers.build(role, modulePath, name)}": a request names no permission name, so module "${modulePath}" cannot be resolved`);
+      }
+
+      const entry = moduleEntry.names.get(name);
+
+      if (entry !== undefined) reached = { name, entry, direct: false };
+    }
+  }
+
+  return reached;
+}

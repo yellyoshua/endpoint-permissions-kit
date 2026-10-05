@@ -212,7 +212,6 @@ describe('USAGE.md example', () => {
     const access = pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_DASHBOARD] });
 
     expect(access).toEqual({
-      'staff::marketing.portals::all': { find: true, update: false, create: false, remove: false },
       'staff::marketing.dashboard::all': { find: true, update: false, create: false, remove: false },
     });
     expect(Object.isFrozen(access)).toBe(true);
@@ -313,12 +312,9 @@ describe('USAGE.md implicit assignments', () => {
     });
   });
 
-  test('forUser includes the required names of the role', () => {
+  test('forUser omits the required names', () => {
     expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_DASHBOARD] })).toEqual({
-      'staff::marketing.portals::all': { find: true, update: false, create: false, remove: false },
       [STAFF_DASHBOARD]: { find: true, update: false, create: false, remove: false },
-      'staff::account.logout::required': { find: false, update: false, create: true, remove: false },
-      'staff::account.sessions::required': { find: true, update: false, create: false, remove: false },
     });
   });
 });

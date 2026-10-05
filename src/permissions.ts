@@ -1,5 +1,4 @@
-import type { Snapshot } from './registry';
-import type { Identity, ResolvedName } from './resolve';
+import type { NameEntry, Snapshot } from './registry';
 import type { MethodAccessMap, NamedPermissionCatalog, PermissionId, RolePermissionAction, RolePermissionModule, RolePermissionTree, UserAssignments, UserPermissionMap } from './types';
 import constants from './constants';
 import errors from './errors';
@@ -20,13 +19,15 @@ const permissions = {
     if (assignments === null || typeof assignments !== 'object') throw errors.create('INVALID_INPUT', 'assignments must be an object');
 
     const { role } = assignments;
-    const identity = resolve.checkIdentity(snapshot, role, assignments.permissions);
+    resolve.checkIdentity(snapshot, role, assignments.permissions);
+
     const access: Record<string, MethodAccessMap> = Object.create(null);
 
-    for (const modulePath of snapshot.modules.keys()) {
-      const resolved = resolve.resolveName(snapshot, role, modulePath, identity);
+    for (const permissionId of assignments.permissions) {
+      const reference = identifiers.parse(permissionId);
+      const entry = reference === null ? undefined : snapshot.modules.get(reference.module)?.names.get(reference.name);
 
-      if (resolved !== null) access[identifiers.build(role, modulePath, resolved.name)] = methodAccess(resolved, role, identity);
+      if (entry !== undefined) access[permissionId] = methodAccess(entry, role);
     }
 
     return Object.freeze(access) as UserPermissionMap;
@@ -40,7 +41,7 @@ const permissions = {
     for (const permissionId of Object.keys(permissions.named(snapshot))) {
       const reference = identifiers.parse(permissionId);
 
-      if (reference === null || reference.role !== role || reference.name === constants.NAME_FOR_ALL_USERS_PERMISSIONS) continue;
+      if (reference === null || reference.role !== role) continue;
 
       const action: RolePermissionAction = { name: reference.name, identifier: reference.name, resourceName: reference.id as PermissionId };
 
@@ -53,26 +54,11 @@ const permissions = {
 
 export default permissions;
 
-function methodAccess(resolved: ResolvedName, role: string, identity: Identity): MethodAccessMap {
-  const enabled = new Set<string>();
-
-  if (resolved.direct) {
-    const actions = resolved.entry.actions.get(role);
-
-    for (const method of constants.METHODS) {
-      if (actions?.[method]?.enabled === true) enabled.add(method);
-    }
-  } else {
-    for (const [sourceId, grant] of resolved.entry.grants) {
-      if (!identity.assigned.has(sourceId)) continue;
-
-      for (const method of Object.keys(grant.actions)) enabled.add(method);
-    }
-  }
-
+function methodAccess(entry: NameEntry, role: string): MethodAccessMap {
+  const actions = entry.actions.get(role);
   const map: Record<string, boolean> = Object.create(null);
 
-  for (const method of constants.METHODS) map[method] = enabled.has(method);
+  for (const method of constants.METHODS) map[method] = actions?.[method]?.enabled === true;
 
   return Object.freeze(map) as MethodAccessMap;
 }
