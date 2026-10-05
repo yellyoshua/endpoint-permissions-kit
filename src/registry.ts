@@ -28,6 +28,7 @@ export interface Snapshot {
   readonly assignable: ReadonlySet<string>;
   readonly modules: ReadonlyMap<string, ModuleEntry>;
   readonly grantsBySource: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
+  readonly requiredByRole: ReadonlyMap<string, readonly PermissionReference[]>;
 }
 
 export interface Registry {

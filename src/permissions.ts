@@ -40,7 +40,7 @@ const permissions = {
     for (const permissionId of Object.keys(permissions.named(snapshot))) {
       const reference = identifiers.parse(permissionId);
 
-      if (reference === null || reference.role !== role) continue;
+      if (reference === null || reference.role !== role || reference.name === constants.NAME_FOR_ALL_USERS_PERMISSIONS) continue;
 
       const action: RolePermissionAction = { name: reference.name, identifier: reference.name, resourceName: reference.id as PermissionId };
 

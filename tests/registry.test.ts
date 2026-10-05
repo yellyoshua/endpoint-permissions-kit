@@ -227,7 +227,7 @@ describe('registry', () => {
       expect(items.hook('find', allowHook)).toBe(items);
       expect(Object.keys(staff).sort()).toEqual(['hook', 'registerActions']);
       expect(Object.keys(itemsAll).sort()).toEqual(['grantTo', 'hook', 'role']);
-      expect(Object.keys(items).sort()).toEqual(['hook', 'module', 'name']);
+      expect(Object.keys(items).sort()).toEqual(['assignToAllUsers', 'hook', 'module', 'name']);
 
       const { role: readOnlyRole } = itemsReadOnly;
 

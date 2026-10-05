@@ -222,3 +222,103 @@ describe('USAGE.md example', () => {
     ].sort());
   });
 });
+
+function accountPermissions(pkit: ExamplePkit): void {
+  const account = pkit.module('account');
+  const logout = account.module('logout').assignToAllUsers();
+  const sessions = account.module('sessions').assignToAllUsers();
+
+  logout.role('staff').registerActions({
+    create: { enabled: true, properties: [] },
+  });
+
+  logout.role('admin').registerActions({
+    create: { enabled: true, properties: [] },
+  });
+
+  sessions.role('staff').registerActions({
+    find: { enabled: true, properties: ['userId'] },
+  });
+
+  function checkOwnSessions(data: Data, context: Context): void {
+    if (data.userId !== (context.user as { id: number }).id) {
+      throw new Error('Only your own sessions can be listed');
+    }
+  }
+
+  sessions.role('staff').hook('find', checkOwnSessions);
+}
+
+describe('USAGE.md implicit assignments', () => {
+  let pkit: ExamplePkit;
+
+  beforeEach(() => {
+    pkit = pkitConfig();
+    portalsPermissions(pkit, []);
+    dashboardPermissions(pkit);
+    accountPermissions(pkit);
+  });
+
+  test('staff reaches logout without storing it', async () => {
+    const validation = await pkit.validate({ action: 'account.logout', method: 'create', role: 'staff', permissions: [STAFF_DASHBOARD], data: {} });
+
+    expect(validation.errors).toEqual([]);
+  });
+
+  test('admin reaches logout with no stored rows', async () => {
+    const validation = await pkit.validate({ action: 'account.logout', method: 'create', role: 'admin', permissions: [] });
+
+    expect(validation.errors).toEqual([]);
+  });
+
+  test('public registers no logout actions: PERMISSION_NOT_ASSIGNED', async () => {
+    const denied = await pkit.validate({ action: 'account.logout', method: 'create', role: 'public', permissions: [] });
+
+    expect(denied.errors[0]?.code).toBe('PERMISSION_NOT_ASSIGNED');
+  });
+
+  test('staff lists only their own sessions', async () => {
+    const base = { action: 'account.sessions', method: 'find', role: 'staff', permissions: [STAFF_DASHBOARD], context: { user: { id: 7 } } } as const;
+    const own = await pkit.validate({ ...base, data: { userId: 7 } });
+    const foreign = await pkit.validate({ ...base, data: { userId: 9 } });
+
+    expect(own.errors).toEqual([]);
+    expect(foreign.errors[0]?.code).toBe('HOOK_ERROR');
+  });
+
+  test('forRole keeps the tree from the docs', () => {
+    expect(pkit.permissions.forRole('staff')).toEqual({
+      modules: [
+        {
+          name: 'marketing',
+          identifier: 'marketing',
+          actions: [],
+          modules: [
+            {
+              name: 'portals',
+              identifier: 'portals',
+              actions: [
+                { name: 'all', identifier: 'all', resourceName: STAFF_PORTALS_ALL },
+                { name: 'update-only', identifier: 'update-only', resourceName: STAFF_PORTALS_UPDATE_ONLY },
+              ],
+            },
+            {
+              name: 'dashboard',
+              identifier: 'dashboard',
+              actions: [{ name: 'all', identifier: 'all', resourceName: STAFF_DASHBOARD }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  test('forUser includes the required names of the role', () => {
+    expect(pkit.permissions.forUser({ role: 'staff', permissions: [STAFF_DASHBOARD] })).toEqual({
+      'staff::marketing.portals::all': { find: true, update: false, create: false, remove: false },
+      [STAFF_DASHBOARD]: { find: true, update: false, create: false, remove: false },
+      'staff::account.logout::required': { find: false, update: false, create: true, remove: false },
+      'staff::account.sessions::required': { find: true, update: false, create: false, remove: false },
+    });
+  });
+});

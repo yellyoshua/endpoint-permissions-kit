@@ -1,5 +1,7 @@
+import type { PermissionReference } from './identifiers';
 import type { ModuleEntry, NameEntry, Registry, Snapshot } from './registry';
 import type { ActionDefs, Method, NamedPermissionCatalog } from './types';
+import constants from './constants';
 import errors from './errors';
 import identifiers from './identifiers';
 
@@ -16,10 +18,16 @@ const snapshot = {
 
   build(target: Registry): Snapshot {
     const named: Record<string, ActionDefs> = Object.create(null);
+    const requiredByRole = new Map<string, PermissionReference[]>();
 
     for (const [modulePath, moduleEntry] of target.modules) {
       for (const [name, nameEntry] of moduleEntry.names) {
-        for (const [role, actions] of nameEntry.actions) named[identifiers.build(role, modulePath, name)] = actions;
+        for (const [role, actions] of nameEntry.actions) {
+          const permissionId = identifiers.build(role, modulePath, name);
+
+          named[permissionId] = actions;
+          addRequired(requiredByRole, { id: permissionId, role, module: modulePath, name });
+        }
       }
     }
 
@@ -33,12 +41,22 @@ const snapshot = {
       assignable,
       modules: target.modules,
       grantsBySource,
+      requiredByRole,
       roles: target.roles,
     });
   },
 };
 
 export default snapshot;
+
+function addRequired(requiredByRole: Map<string, PermissionReference[]>, reference: PermissionReference): void {
+  if (reference.name !== constants.NAME_FOR_ALL_USERS_PERMISSIONS) return;
+
+  const references = requiredByRole.get(reference.role) ?? [];
+
+  requiredByRole.set(reference.role, references);
+  references.push(Object.freeze(reference));
+}
 
 function checkModule(modulePath: string, moduleEntry: ModuleEntry, assignable: ReadonlySet<string>, grantsBySource: Map<string, Map<string, string[]>>): void {
   if (moduleEntry.names.size === 0) {

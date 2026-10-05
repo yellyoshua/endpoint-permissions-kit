@@ -1,11 +1,13 @@
 import type { NameEntry, Snapshot } from './registry';
 import type { Method, Properties } from './types';
+import constants from './constants';
 import errors from './errors';
 import identifiers from './identifiers';
 
 export interface Identity {
   readonly assigned: ReadonlySet<string>;
   readonly names: ReadonlyMap<string, string>;
+  readonly injected: readonly string[];
 }
 
 export interface ResolvedName {
@@ -41,6 +43,8 @@ const resolve = {
 
       if (!snapshot.assignable.has(reference.id)) throw errors.create('UNKNOWN_PERMISSION', `"${reference.id}" is not an assignable permission`);
 
+      if (reference.name === constants.NAME_FOR_ALL_USERS_PERMISSIONS) continue;
+
       const held = names.get(reference.module);
 
       if (held !== undefined && held !== reference.name) {
@@ -51,7 +55,17 @@ const resolve = {
       names.set(reference.module, reference.name);
     }
 
-    return { assigned, names };
+    const injected: string[] = [];
+
+    for (const reference of snapshot.requiredByRole.get(role) ?? []) {
+      if (names.has(reference.module)) continue;
+
+      assigned.add(reference.id);
+      names.set(reference.module, reference.name);
+      injected.push(reference.id);
+    }
+
+    return { assigned, names, injected };
   },
 
   resolveName(snapshot: Snapshot, role: string, modulePath: string, identity: Identity): ResolvedName | null {

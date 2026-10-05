@@ -1,6 +1,8 @@
 import type { Registry } from './registry';
 import type { HookFn, Method } from './types';
 import NameBuilder from './name-builder';
+import constants from './constants';
+import errors from './errors';
 import identifiers from './identifiers';
 import registry from './registry';
 
@@ -23,6 +25,7 @@ export default class ModuleBuilder<R extends string> {
 
     this.module = this.module.bind(this);
     this.name = this.name.bind(this);
+    this.assignToAllUsers = this.assignToAllUsers.bind(this);
     this.hook = this.hook.bind(this);
   }
 
@@ -39,6 +42,24 @@ export default class ModuleBuilder<R extends string> {
   }
 
   name(name: string): NameBuilder<R> {
+    if (name === constants.NAME_FOR_ALL_USERS_PERMISSIONS) {
+      throw errors.create('INVALID_DEFINITION', `Permission name ${name} is reserved: use assignToAllUsers()`);
+    }
+
+    return this.#nameBuilder(name);
+  }
+
+  assignToAllUsers(): NameBuilder<R> {
+    return this.#nameBuilder(constants.NAME_FOR_ALL_USERS_PERMISSIONS);
+  }
+
+  hook(method: Method, fn: HookFn): this {
+    registry.registerModuleHook(this.#registry, identifiers.joinModule(this.#path), method, fn);
+
+    return this;
+  }
+
+  #nameBuilder(name: string): NameBuilder<R> {
     const existing = this.#names.get(name);
 
     if (existing !== undefined) return existing;
@@ -48,11 +69,5 @@ export default class ModuleBuilder<R extends string> {
     this.#names.set(name, created);
 
     return created;
-  }
-
-  hook(method: Method, fn: HookFn): this {
-    registry.registerModuleHook(this.#registry, identifiers.joinModule(this.#path), method, fn);
-
-    return this;
   }
 }

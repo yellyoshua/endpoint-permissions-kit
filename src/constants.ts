@@ -3,6 +3,8 @@ const constants = {
 
   GENERAL_ROLE: 'general',
 
+  NAME_FOR_ALL_USERS_PERMISSIONS: 'required',
+
   GLOBAL_HOOK_MARKER: '*',
 
   ALL_FIELDS: '*',

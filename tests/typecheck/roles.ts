@@ -36,6 +36,12 @@ async function verifyRoleContracts(): Promise<void> {
   items.grantTo(reportsId).role('staff');
   items.role('staff').hook('update', inspectHookArguments);
 
+  const logout = pkit.module('account').module('logout').assignToAllUsers();
+  logout.role('staff').registerActions({ create: { enabled: true, properties: [] } });
+  logout.role('admin').hook('create', inspectHookArguments);
+  // @ts-expect-error
+  logout.role('adminn');
+
   const identity = { role: 'staff', permissions: ['staff::inventory.reports::all'], action: 'inventory.items' } as const;
   void pkit.validate({ ...identity, method: 'find' });
   // @ts-expect-error
